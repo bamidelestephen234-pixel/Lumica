@@ -7,3 +7,4 @@ plotly
 cryptography
 google-api-python-client
 pyotp
+reportlab
