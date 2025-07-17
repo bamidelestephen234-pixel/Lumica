@@ -24,7 +24,6 @@ import uuid
 import pyotp
 import qrcode as qr_gen
 from io import BytesIO, StringIO
-from weasyprint import HTML
 import qrcode
 import plotly.express as px
 import plotly.graph_objects as go
@@ -32,6 +31,15 @@ from plotly.subplots import make_subplots
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.charts.barcharts import VerticalBarChart
+from PIL import Image
 
 try:
     from google.oauth2.credentials import Credentials
@@ -948,13 +956,13 @@ def save_draft_report(report_data):
         student_class = report_data.get('student_class', '')
         term = report_data.get('term', '')
         teacher_id = report_data.get('teacher_id', '')
-        
+
         # Use consistent ID format to prevent duplicates
         consistent_id = f"AUTO-{teacher_id}-{student_name.replace(' ', '_')}-{student_class}-{term}"
-        
+
         # Always use the consistent ID regardless of auto_save or manual save
         report_data['draft_id'] = consistent_id
-        
+
         filename = f"draft_{consistent_id}.json"
         filepath = os.path.join(draft_dir, filename)
 
@@ -969,7 +977,7 @@ def save_draft_report(report_data):
 
         # Update timestamp
         report_data['last_modified'] = datetime.datetime.now().isoformat()
-        
+
         # If existing data, preserve creation date
         if existing_data:
             report_data['created_date'] = existing_data.get('created_date', report_data['created_date'])
@@ -1002,11 +1010,11 @@ def get_draft_reports(teacher_id=None):
                 try:
                     with open(filepath, 'r') as f:
                         draft_data = json.load(f)
-                        
+
                         # Filter by teacher if specified
                         if teacher_id and draft_data.get('teacher_id') != teacher_id:
                             continue
-                            
+
                         draft_reports.append(draft_data)
                 except Exception:
                     continue
@@ -1062,7 +1070,24 @@ def save_pending_report(report_data):
         pdf_filename = f"pending_{report_data['report_id']}.pdf"
         pdf_path = os.path.join(pending_dir, pdf_filename)
 
-        HTML(string=report_data['html_content']).write_pdf(pdf_path)
+        # Generate PDF using ReportLab instead of WeasyPrint
+        if 'scores_data' in report_data:
+            report_df = pd.DataFrame(report_data['scores_data'], columns=["Subject", "CA", "Exam", "Total", "Last Term", "Cumulative", "Grade"])
+            pdf_data = create_pdf_with_reportlab(
+                report_data['student_name'],
+                report_data['student_class'],
+                report_data['term'],
+                report_df,
+                report_data.get('total_term_score', 0),
+                report_data.get('average_cumulative', 0),
+                report_data.get('final_grade', 'F'),
+                get_logo_base64(),
+                None,
+                report_data.get('report_details')
+            )
+            
+            with open(pdf_path, 'wb') as f:
+                f.write(pdf_data)
 
         return True
     except Exception as e:
@@ -1243,6 +1268,169 @@ def generate_qr_code(data):
     buffer = BytesIO()
     qr.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+def create_pdf_with_reportlab(student_name, student_class, term, report_df, total_term_score, average_cumulative, final_grade, logo_base64, student_data=None, report_details=None):
+    """Generate PDF using ReportLab instead of WeasyPrint"""
+    
+    date_now = datetime.datetime.now().strftime("%A, %B %d, %Y, %I:%M %p WAT")
+    report_id = generate_report_id()
+    school_code = "ASS2025"
+    
+    # Load school configuration
+    school_config = load_school_config()
+    school_name = school_config.get('school_name', "AKIN'S SUNRISE SECONDARY SCHOOL")
+    school_address = school_config.get('school_address', "SUNRISE AVENUE OFF LUJOJOMU ROAD\nUPPER AYEYEMI, ONDO CITY\nONDO STATE, NIGERIA")
+    
+    # Create PDF
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=18)
+    
+    # Container for the 'Flowable' objects
+    elements = []
+    
+    # Define styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=16, spaceAfter=30, alignment=TA_CENTER, textColor=colors.HexColor('#1976D2'))
+    subtitle_style = ParagraphStyle('CustomSubtitle', parent=styles['Normal'], fontSize=12, spaceAfter=20, alignment=TA_CENTER, textColor=colors.HexColor('#1976D2'))
+    normal_style = ParagraphStyle('CustomNormal', parent=styles['Normal'], fontSize=10, spaceAfter=12)
+    
+    # School header
+    elements.append(Paragraph(school_name.upper(), title_style))
+    elements.append(Paragraph(school_address.upper(), subtitle_style))
+    elements.append(Spacer(1, 20))
+    
+    # Student Information
+    elements.append(Paragraph("STUDENT INFORMATION", ParagraphStyle('SectionHeader', parent=styles['Heading2'], fontSize=14, textColor=colors.HexColor('#1976D2'))))
+    
+    student_info_data = [
+        ['Name:', student_name.upper(), 'Gender:', st.session_state.get('student_gender', student_data.get('gender', 'M/F') if student_data else 'M/F')],
+        ['Class:', student_class.upper(), 'Admission No:', report_details.get('admission_number', '') if report_details else ''],
+        ['Term:', term, 'Session:', report_details.get('session_year', '') if report_details else ''],
+        ['No of Students:', report_details.get('num_students', '') if report_details else '', 'Position:', report_details.get('student_position', '') if report_details else '']
+    ]
+    
+    student_table = Table(student_info_data, colWidths=[1.2*inch, 2*inch, 1.2*inch, 2*inch])
+    student_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#E0E0E0'))
+    ]))
+    elements.append(student_table)
+    elements.append(Spacer(1, 20))
+    
+    # Academic Performance Table
+    elements.append(Paragraph("ACADEMIC PERFORMANCE", ParagraphStyle('SectionHeader', parent=styles['Heading2'], fontSize=14, textColor=colors.HexColor('#1976D2'))))
+    
+    # Prepare academic data
+    academic_data = [['Subject', 'CA (40)', 'Exam (60)', 'Total (100)', 'Cumulative', 'Grade']]
+    for _, row in report_df.iterrows():
+        academic_data.append([
+            str(row['Subject']),
+            str(row['CA']),
+            str(row['Exam']),
+            str(row['Total']),
+            f"{row['Cumulative']:.1f}",
+            str(row['Grade'])
+        ])
+    
+    academic_table = Table(academic_data, colWidths=[2*inch, 0.8*inch, 0.8*inch, 0.8*inch, 1*inch, 0.6*inch])
+    academic_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1976D2')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('ALIGN', (0, 1), (0, -1), 'LEFT'),  # Subject names left-aligned
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#D0D0D0')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8F9FA')])
+    ]))
+    elements.append(academic_table)
+    elements.append(Spacer(1, 20))
+    
+    # Performance Summary
+    summary_data = [
+        ['Term Total:', str(total_term_score), 'Average:', f"{average_cumulative:.2f}%", 'Grade:', final_grade]
+    ]
+    summary_table = Table(summary_data, colWidths=[1*inch, 1*inch, 1*inch, 1*inch, 1*inch, 1*inch])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#E3F2FD')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#1976D2')),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#1976D2'))
+    ]))
+    elements.append(summary_table)
+    elements.append(Spacer(1, 20))
+    
+    # Teacher Comments if provided
+    if report_details:
+        elements.append(Paragraph("COMMENTS", ParagraphStyle('SectionHeader', parent=styles['Heading2'], fontSize=14, textColor=colors.HexColor('#1976D2'))))
+        
+        comments_data = [
+            ['Class Teacher:', report_details.get('class_teacher_comment', '')],
+            ['Principal:', report_details.get('principal_comment', '')],
+            ['Next Term Begins:', report_details.get('next_term_date', '')]
+        ]
+        
+        comments_table = Table(comments_data, colWidths=[1.5*inch, 4.5*inch])
+        comments_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.white),
+            ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#E0E0E0'))
+        ]))
+        elements.append(comments_table)
+        elements.append(Spacer(1, 20))
+    
+    # Footer with QR code and report ID
+    qr_data = f"REPORT_ID:{report_id}|SCHOOL:{school_code}|NAME:{student_name}|CLASS:{student_class}|TERM:{term}|CUMULATIVE:{average_cumulative:.2f}|GRADE:{final_grade}|DATE:{date_now}"
+    qr_code_b64 = generate_qr_code(qr_data)
+    
+    # Create QR code image
+    qr_img_data = base64.b64decode(qr_code_b64)
+    qr_img = Image.open(BytesIO(qr_img_data))
+    qr_img_buffer = BytesIO()
+    qr_img.save(qr_img_buffer, format='PNG')
+    qr_img_buffer.seek(0)
+    
+    footer_data = [
+        [f'Report ID: {report_id}', f'Generated: {date_now}'],
+        ['Verification QR Code ↗', 'GRADING: A=Excellent, B=Good, C=Average, D=Below Average, E=Poor']
+    ]
+    
+    footer_table = Table(footer_data, colWidths=[3*inch, 3*inch])
+    footer_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F8F9FA')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#666666')),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#E0E0E0'))
+    ]))
+    elements.append(footer_table)
+    
+    # Build PDF
+    doc.build(elements)
+    
+    # Get the value of the BytesIO buffer and return it
+    pdf_data = buffer.getvalue()
+    buffer.close()
+    
+    return pdf_data
 
 def generate_report_id():
     import random
@@ -2614,7 +2802,7 @@ def draft_reports_tab():
 
     # Get drafts for current teacher or all (if admin)
     is_admin = check_user_permissions(st.session_state.teacher_id, "system_config")
-    
+
     if is_admin:
         view_option = st.selectbox("View Drafts", ["My Drafts Only", "All Drafts"], key="draft_view_option")
         if view_option == "My Drafts Only":
@@ -2637,7 +2825,7 @@ def draft_reports_tab():
                     st.write(f"**Term:** {draft.get('term', 'N/A')}")
                     st.write(f"**Teacher:** {draft.get('teacher_id', 'N/A')}")
                     st.write(f"**Completion:** {draft.get('completion_status', '0')}%")
-                    
+
                     # Show last modified
                     last_modified = draft.get('last_modified', '')
                     if last_modified:
@@ -2674,7 +2862,7 @@ def draft_reports_tab():
         if is_admin and len(draft_reports) > 1:
             st.markdown("---")
             st.markdown("#### 🗑️ Bulk Operations")
-            
+
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🗑️ Delete All My Drafts"):
@@ -2712,28 +2900,28 @@ def report_generator_tab():
     if st.session_state.get('load_draft_data'):
         draft_data = st.session_state.load_draft_data
         st.info(f"📄 Loaded draft for {draft_data.get('student_name', 'Unknown')} - Continue editing below")
-        
+
         # Pre-fill form with draft data
         st.session_state.student_name = draft_data.get('student_name', '')
         st.session_state.student_class = draft_data.get('student_class', '')
         st.session_state.term = draft_data.get('term', '1st Term')
         st.session_state.parent_email = draft_data.get('parent_email', '')
-        
+
         # Load subject scores
         draft_scores = draft_data.get('subject_scores', {})
         for subject, scores in draft_scores.items():
             st.session_state[f"{subject}_ca"] = scores.get('ca', 0)
             st.session_state[f"{subject}_exam"] = scores.get('exam', 0)
             st.session_state[f"{subject}_last"] = scores.get('last_cumulative', 0)
-        
+
         # Load selected subjects
         st.session_state.selected_subjects = list(draft_scores.keys())
-        
+
         # Load additional details if present
         additional_data = draft_data.get('additional_data', {})
         for key, value in additional_data.items():
             st.session_state[key] = value
-            
+
         # Clear the load flag
         del st.session_state.load_draft_data
 
@@ -2755,7 +2943,7 @@ def report_generator_tab():
 
     st.markdown("---")
     st.markdown("#### 📧 Parent Communication & Report Details")
-    
+
     col1, col2 = st.columns(2)
     with col1:
         parent_email = st.text_input("📧 Parent's Email Address", key="parent_email", 
@@ -2866,7 +3054,7 @@ def report_generator_tab():
 
     # Auto-save and draft management
     col_auto1, col_auto2, col_auto3 = st.columns([1, 1, 1])
-    
+
     with col_auto1:
         if st.button("💾 Save as Draft", key="save_draft_btn"):
             if student_name and student_class and selected_subjects:
@@ -2893,7 +3081,7 @@ def report_generator_tab():
                     'skill_clubs', 'skill_hobbies', 'skill_sports', 'teacher_comment',
                     'principal_comment', 'next_term'
                 ]
-                
+
                 for field in form_fields:
                     if field in st.session_state:
                         additional_data[field] = st.session_state[field]
@@ -2933,7 +3121,7 @@ def report_generator_tab():
         if student_name and student_class and selected_subjects:
             if 'last_auto_save' not in st.session_state:
                 st.session_state.last_auto_save = datetime.datetime.now()
-            
+
             # Check if 30 seconds have passed since last auto-save
             time_diff = datetime.datetime.now() - st.session_state.last_auto_save
             if time_diff.seconds >= 30:
@@ -2961,7 +3149,7 @@ def report_generator_tab():
                         'skill_clubs', 'skill_hobbies', 'skill_sports', 'teacher_comment',
                         'principal_comment', 'next_term'
                     ]
-                    
+
                     for field in form_fields:
                         if field in st.session_state:
                             additional_data[field] = st.session_state[field]
@@ -3052,8 +3240,15 @@ def report_generator_tab():
 
                 logo_base64 = get_logo_base64()
                 student_data = load_student_data(student_name, student_class) if student_name and student_class else None
+                
+                # Generate PDF using ReportLab
+                pdf_data = create_pdf_with_reportlab(student_name, student_class, term, report_df, total_term_score, average_cumulative, final_grade, logo_base64, student_data, report_details)
+                
+                with open("report_card.pdf", "wb") as f:
+                    f.write(pdf_data)
+                
+                # Still generate HTML for preview (optional)
                 html = render_html_report(student_name, student_class, term, report_df, total_term_score, average_cumulative, final_grade, logo_base64, student_data, report_details)
-                HTML(string=html).write_pdf("report_card.pdf")
 
             st.success("✅ Report Card Generated Successfully!")
 
@@ -3871,16 +4066,16 @@ def admin_panel_tab():
                     if st.session_state.get(f"show_edit_{user_id}", False):
                         st.markdown("---")
                         st.markdown(f"**Edit User: {user.get('full_name', user_id)}**")
-                        
+
                         with st.form(f"edit_user_form_{user_id}"):
                             edit_col1, edit_col2 = st.columns(2)
-                            
+
                             with edit_col1:
                                 edit_full_name = st.text_input("Full Name", value=user.get('full_name', ''))
                                 edit_email = st.text_input("Email", value=user.get('email', ''))
                                 edit_role = st.selectbox("Role", list(USER_ROLES.keys()), 
                                                        index=list(USER_ROLES.keys()).index(user.get('role', 'teacher')))
-                                
+
                             with edit_col2:
                                 edit_phone = st.text_input("Phone", value=user.get('phone', ''))
                                 edit_session_timeout = st.number_input("Session Timeout (minutes)", 
@@ -3889,12 +4084,12 @@ def admin_panel_tab():
                                 edit_departments = st.multiselect("Departments", 
                                                                 ["all", "sciences", "mathematics", "languages", "arts", "social_studies"],
                                                                 default=user.get('departments', []))
-                            
+
                             edit_assigned_classes = st.multiselect("Assigned Classes", 
                                 ["SS1A", "SS1B", "SS1C", "SS2A", "SS2B", "SS2C", "SS3A", "SS3B", "SS3C", 
                                  "JSS1A", "JSS1B", "JSS1C", "JSS2A", "JSS2B", "JSS2C", "JSS3A", "JSS3B", "JSS3C"],
                                 default=user.get('assigned_classes', []))
-                            
+
                             form_col1, form_col2 = st.columns(2)
                             with form_col1:
                                 if st.form_submit_button("💾 Save Changes"):
@@ -3908,7 +4103,7 @@ def admin_panel_tab():
                                             'departments': edit_departments or ["all"],
                                             'assigned_classes': edit_assigned_classes
                                         })
-                                        
+
                                         if save_user_database(users_db):
                                             st.success("✅ User updated successfully!")
                                             log_teacher_activity(st.session_state.teacher_id, "user_updated", {
@@ -3921,7 +4116,7 @@ def admin_panel_tab():
                                             st.error("❌ Error updating user")
                                     else:
                                         st.error("❌ Please fill in required fields")
-                            
+
                             with form_col2:
                                 if st.form_submit_button("❌ Cancel"):
                                     st.session_state[f"show_edit_{user_id}"] = False
