@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+weasyprint
+qrcode
+plotly
+cryptography
+google-api-python-client
+pyotp
