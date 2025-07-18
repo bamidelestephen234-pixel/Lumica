@@ -5683,3 +5683,120 @@ def main():
 
 if __name__ == "__main__":
     main()
+from flask import Flask, request, render_template, redirect, url_for
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+import random
+import requests
+import os
+
+# --- Flask Setup ---
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+# --- Flutterwave API Keys ---
+FLW_SECRET_KEY = os.getenv('FLW_SECRET_KEY')  # Set this in your environment
+
+# --- Models ---
+class Payment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), nullable=False)
+    amount = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(50), default='pending')
+    tx_ref = db.Column(db.String(100), unique=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    token = db.relationship('Token', backref='payment', uselist=False)
+
+class Token(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    value = db.Column(db.String(6), unique=True, nullable=False)
+    used = db.Column(db.Boolean, default=False)
+    payment_id = db.Column(db.Integer, db.ForeignKey('payment.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+# --- Helper: Token Generation ---
+def generate_token():
+    while True:
+        tok = f"{random.randint(100000, 999999)}"
+        if not Token.query.filter_by(value=tok).first():
+            return tok
+
+# --- Routes ---
+
+@app.before_first_request
+def create_tables():
+    db.create_all()
+
+@app.route('/')
+def home():
+    return render_template('payment_form.html')
+
+@app.route('/pay', methods=['POST'])
+def pay():
+    email = request.form['email']
+    tx_ref = f"tx-{int(datetime.now().timestamp())}{random.randint(100,999)}"
+    payment = Payment(email=email, amount=500, tx_ref=tx_ref)
+    db.session.add(payment)
+    db.session.commit()
+
+    payload = {
+        "tx_ref": tx_ref,
+        "amount": "500",
+        "currency": "NGN",
+        "redirect_url": url_for('payment_callback', _external=True),
+        "customer": {"email": email}
+    }
+    headers = {"Authorization": f"Bearer {FLW_SECRET_KEY}"}
+    r = requests.post("https://api.flutterwave.com/v3/payments", json=payload, headers=headers).json()
+
+    if r.get("status") == "success":
+        return redirect(r["data"]["link"])
+    else:
+        return "Payment initiation failed", 400
+
+@app.route('/payment-callback')
+def payment_callback():
+    tx_ref = request.args.get('tx_ref')
+    status = request.args.get('status')
+    if status != 'successful':
+        return "Payment not successful", 400
+
+    VERIFY_URL = f"https://api.flutterwave.com/v3/transactions/verify_by_reference?tx_ref={tx_ref}"
+    headers = {"Authorization": f"Bearer {FLW_SECRET_KEY}"}
+    resp = requests.get(VERIFY_URL, headers=headers).json()
+    if resp.get('status') == 'success' and resp['data']['status'] == 'successful':
+        payment = Payment.query.filter_by(tx_ref=tx_ref).first()
+        if payment and payment.status != 'successful':
+            payment.status = 'successful'
+            # Generate and save token
+            token_value = generate_token()
+            token = Token(value=token_value, payment=payment)
+            db.session.add(token)
+            db.session.commit()
+            return render_template('show_token.html', token=token_value)
+        elif payment and payment.token:
+            # Payment already processed, show the same token
+            return render_template('show_token.html', token=payment.token.value)
+    return "Payment verification failed", 400
+
+@app.route('/enter-token')
+def enter_token():
+    return render_template('enter_token.html')
+
+@app.route('/access-result', methods=['POST'])
+def access_result():
+    token_value = request.form['token']
+    token = Token.query.filter_by(value=token_value, used=False).first()
+    if token:
+        token.used = True
+        db.session.commit()
+        # Replace this with your actual result logic or data
+        return render_template('show_result.html')
+    else:
+        return "Invalid or already used token", 400
+
+if __name__ == '__main__':
+    app.run(debug=True)
+    
