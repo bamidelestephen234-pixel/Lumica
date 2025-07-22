@@ -132,12 +132,12 @@ def load_user_database():
                     "assigned_classes": ["SS1A", "SS1B"],
                     "departments": ["sciences"]
                 },
-                "teacher_musa": {
-                    "password_hash": hash_password("password456"),
-                    "role": "teacher",
-                    "full_name": "Teacher Musa",
-                    "email": "musa@akinssunrise.edu.ng",
-                    "phone": "+234 800 345 6789",
+                "school_ict": {
+                    "password_hash": hash_password("akins1111"),
+                    "role": "admin",
+                    "full_name": "Akins Sunrise",
+                    "email": "akinssunrise@gmail.com",
+                    "phone": "+234 8160844529",
                     "created_date": datetime.datetime.now().isoformat(),
                     "last_login": None,
                     "active": True,
@@ -146,8 +146,8 @@ def load_user_database():
                     "session_timeout": 30,
                     "failed_attempts": 0,
                     "locked_until": None,
-                    "assigned_classes": ["JSS1A"],
-                    "departments": ["mathematics"]
+                    "assigned_classes": [],
+                    "departments": ["all"]
                 }
             }
             save_user_database(default_users)
