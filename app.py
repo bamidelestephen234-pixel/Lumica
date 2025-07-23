@@ -134,7 +134,7 @@ def load_user_database():
                 },
                 "school_ict": {
                     "password_hash": hash_password("akins1111"),
-                    "role": "admin",
+                    "role": "principal",
                     "full_name": "Akins Sunrise",
                     "email": "akinssunrise@gmail.com",
                     "phone": "+234 8160844529",
