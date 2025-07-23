@@ -56,7 +56,7 @@ subjects = sorted([
     "English", "Maths", "French", "C.C Art", "Business Studies", "Economics", "Yoruba",
     "physics", "chemistry", "Biology", "Further Mathematics", "National Value", 
     "Lit-in-Eng", "Guidance & Counseling", "C.R.S", "Agric Sci", "Home Eco", 
-    "Basic Science", "Basic Tech", "PHE", "Computer"
+    "Basic Science", "Basic Tech", "PHE", "Computer","civic Education","Goverment","Geography","Animal Husbandry","Marketing",
 ])
 
 # User roles and permissions
