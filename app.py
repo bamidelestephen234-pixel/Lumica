@@ -64,27 +64,76 @@ USER_ROLES = {
     "principal": {
         "level": 5,
         "permissions": ["all_access", "user_management", "system_config", "backup_restore", "data_export"],
-        "description": "Principal - Full system access"
+        "description": "Principal - Full system access",
+        "default_features": [
+            "report_generation", "draft_management", "student_database", 
+            "analytics_dashboard", "verification_system", "admin_panel"
+        ]
     },
     "head_of_department": {
         "level": 4,
         "permissions": ["department_reports", "teacher_management", "grade_boundaries", "class_management"],
-        "description": "Head of Department - Departmental oversight"
+        "description": "Head of Department - Departmental oversight",
+        "default_features": [
+            "report_generation", "draft_management", "student_database", 
+            "analytics_dashboard", "verification_system"
+        ]
     },
     "class_teacher": {
         "level": 3,
         "permissions": ["class_reports", "student_management", "report_generation", "parent_communication"],
-        "description": "Class Teacher - Class-specific access"
+        "description": "Class Teacher - Class-specific access",
+        "default_features": [
+            "report_generation", "draft_management", "student_database", "verification_system"
+        ]
     },
     "teacher": {
         "level": 2,
         "permissions": ["report_generation", "student_view"],
-        "description": "Teacher - Basic teaching functions"
+        "description": "Teacher - Basic teaching functions",
+        "default_features": [
+            "report_generation", "draft_management", "verification_system"
+        ]
     },
     "parent": {
         "level": 1,
         "permissions": ["view_child_reports", "communication"],
-        "description": "Parent - View child's reports only"
+        "description": "Parent - View child's reports only",
+        "default_features": []
+    }
+}
+
+# Available system features
+SYSTEM_FEATURES = {
+    "report_generation": {
+        "name": "📝 Generate Reports",
+        "description": "Create and generate student report cards",
+        "required_permission": "report_generation"
+    },
+    "draft_management": {
+        "name": "📝 Draft Reports",
+        "description": "Save and manage draft reports",
+        "required_permission": "report_generation"
+    },
+    "student_database": {
+        "name": "👥 Student Database",
+        "description": "Add, edit, and manage student information",
+        "required_permission": "student_management"
+    },
+    "analytics_dashboard": {
+        "name": "📊 Analytics",
+        "description": "View performance analytics and statistics",
+        "required_permission": "department_reports"
+    },
+    "verification_system": {
+        "name": "🔍 Verify Reports",
+        "description": "Verify report card authenticity",
+        "required_permission": None  # Available to all authenticated users
+    },
+    "admin_panel": {
+        "name": "⚙️ Admin Panel",
+        "description": "System administration and configuration",
+        "required_permission": "system_config"
     }
 }
 
@@ -179,6 +228,39 @@ def check_user_permissions(user_id, required_permission):
 
         user_permissions = USER_ROLES[user_role]['permissions']
         return required_permission in user_permissions or 'all_access' in user_permissions
+    except Exception as e:
+        return False
+
+def check_user_feature_access(user_id, feature_key):
+    """Check if user has access to a specific system feature"""
+    try:
+        users_db = load_user_database()
+        if user_id not in users_db:
+            return False
+
+        user = users_db[user_id]
+
+        # Check custom feature permissions first
+        custom_features = user.get('custom_features', [])
+        if custom_features:
+            return feature_key in custom_features
+
+        # Fall back to role-based default features
+        user_role = user.get('role', 'teacher')
+        if user_role not in USER_ROLES:
+            return False
+
+        default_features = USER_ROLES[user_role].get('default_features', [])
+
+        # Check if feature requires specific permission
+        if feature_key in SYSTEM_FEATURES:
+            required_permission = SYSTEM_FEATURES[feature_key].get('required_permission')
+            if required_permission:
+                return check_user_permissions(user_id, required_permission)
+            else:
+                return True  # No specific permission required
+
+        return feature_key in default_features
     except Exception as e:
         return False
 
@@ -794,7 +876,14 @@ def generate_class_reports(student_class, term, subject_scores_dict):
                     last_cumulative = scores.get('last_cumulative', 0)
 
                     total = calculate_total(ca, exam)
-                    subject_cumulative = (total + last_cumulative) / 2
+                    
+                    # For 1st term, cumulative is same as current term total
+                    if term == "1st Term":
+                        subject_cumulative = total
+                    else:
+                        # For 2nd and 3rd terms, average with previous cumulative
+                        subject_cumulative = (total + last_cumulative) / 2
+                        
                     total_term_score += total
                     all_cumulatives.append(subject_cumulative)
 
@@ -948,13 +1037,13 @@ def save_draft_report(report_data):
         student_class = report_data.get('student_class', '')
         term = report_data.get('term', '')
         teacher_id = report_data.get('teacher_id', '')
-        
+
         # Use consistent ID format to prevent duplicates
         consistent_id = f"AUTO-{teacher_id}-{student_name.replace(' ', '_')}-{student_class}-{term}"
-        
+
         # Always use the consistent ID regardless of auto_save or manual save
         report_data['draft_id'] = consistent_id
-        
+
         filename = f"draft_{consistent_id}.json"
         filepath = os.path.join(draft_dir, filename)
 
@@ -969,7 +1058,7 @@ def save_draft_report(report_data):
 
         # Update timestamp
         report_data['last_modified'] = datetime.datetime.now().isoformat()
-        
+
         # If existing data, preserve creation date
         if existing_data:
             report_data['created_date'] = existing_data.get('created_date', report_data['created_date'])
@@ -1002,11 +1091,11 @@ def get_draft_reports(teacher_id=None):
                 try:
                     with open(filepath, 'r') as f:
                         draft_data = json.load(f)
-                        
+
                         # Filter by teacher if specified
                         if teacher_id and draft_data.get('teacher_id') != teacher_id:
                             continue
-                            
+
                         draft_reports.append(draft_data)
                 except Exception:
                     continue
@@ -1091,61 +1180,34 @@ def get_pending_reports():
     except Exception:
         return []
 
-def approve_report(report_id):
+def auto_approve_report(report_data):
+    """Automatically approve and save report without requiring admin approval"""
     try:
-        pending_dir = "pending_reports"
-        filename = f"pending_{report_id}.json"
-        filepath = os.path.join(pending_dir, filename)
+        approved_dir = "approved_reports"
+        os.makedirs(approved_dir, exist_ok=True)
 
-        if not os.path.exists(filepath):
-            return False, "Report not found"
+        report_data['status'] = 'approved'
+        report_data['approved_date'] = datetime.datetime.now().isoformat()
+        report_data['approved_by'] = 'auto_system'
 
-        with open(filepath, 'r') as f:
-            report_data = json.load(f)
+        approved_path = os.path.join(approved_dir, f"approved_{report_data['report_id']}.json")
+        with open(approved_path, 'w') as f:
+            json.dump(report_data, f, indent=2)
 
-        if report_data.get('parent_email'):
-            pdf_path = os.path.join(pending_dir, f"pending_{report_id}.pdf")
-            success, message = send_report_email(
-                report_data['parent_email'],
-                report_data['student_name'],
-                report_data['student_class'],
-                report_data['term'],
-                pdf_path,
-                report_id
-            )
+        # Save PDF directly to approved folder
+        approved_pdf_path = os.path.join(approved_dir, f"approved_{report_data['report_id']}.pdf")
+        HTML(string=report_data['html_content']).write_pdf(approved_pdf_path)
 
-            if success:
-                approved_dir = "approved_reports"
-                os.makedirs(approved_dir, exist_ok=True)
+        log_teacher_activity(st.session_state.get('teacher_id', 'system'), "report_auto_approved", {
+            "report_id": report_data['report_id'],
+            "student_name": report_data['student_name'],
+            "auto_approved": True
+        })
 
-                report_data['status'] = 'approved'
-                report_data['approved_date'] = datetime.datetime.now().isoformat()
-                report_data['approved_by'] = st.session_state.get('teacher_id', 'admin')
-
-                approved_path = os.path.join(approved_dir, f"approved_{report_id}.json")
-                with open(approved_path, 'w') as f:
-                    json.dump(report_data, f, indent=2)
-
-                approved_pdf_path = os.path.join(approved_dir, f"approved_{report_id}.pdf")
-                shutil.copy2(pdf_path, approved_pdf_path)
-
-                os.remove(filepath)
-                os.remove(pdf_path)
-
-                log_teacher_activity(st.session_state.get('teacher_id', 'admin'), "report_approved", {
-                    "report_id": report_id,
-                    "student_name": report_data['student_name'],
-                    "parent_email": report_data['parent_email']
-                })
-
-                return True, f"Report approved and sent to {report_data['parent_email']}"
-            else:
-                return False, f"Email sending failed: {message}"
-        else:
-            return False, "No parent email provided"
+        return True, f"Report automatically approved and saved"
 
     except Exception as e:
-        return False, f"Error approving report: {str(e)}"
+        return False, f"Error auto-approving report: {str(e)}"
 
 def reject_report(report_id, reason=""):
     try:
@@ -1215,10 +1277,9 @@ def get_logo_base64(uploaded_file=None):
             print(f"Logo loaded from uploaded file, size: {len(logo_data)} characters")
             return logo_data
         else:
-            logo_files = ["school_logo.png.png", "school_logo.png", "logo.png", "logo.jpg", "logo.jpeg"]
+            logo_files = ["school_logo.png", "logo.png", "logo.jpg", "logo.jpeg", "generated-icon.png"]
 
             for logo_file in logo_files:
-                print(f"Checking for logo file: {logo_file}")
                 if os.path.exists(logo_file):
                     try:
                         with open(logo_file, "rb") as image_file:
@@ -1228,11 +1289,8 @@ def get_logo_base64(uploaded_file=None):
                     except Exception as e:
                         print(f"Error reading logo file {logo_file}: {e}")
                         continue
-                else:
-                    print(f"Logo file not found: {logo_file}")
 
             print(f"Warning: No logo file found. Tried: {logo_files}")
-            print(f"Current directory contents: {os.listdir('.')}")
             return ""
     except Exception as e:
         print(f"Error loading logo: {e}")
@@ -1502,126 +1560,199 @@ def get_premium_features():
         }
     }
 
-def get_default_login_instructions_template():
-    """Get default login instructions template"""
-    return """
-AKIN'S SUNRISE SECONDARY SCHOOL
-PARENT PORTAL ACCESS INSTRUCTIONS
-
-Dear Parent/Guardian,
-
-Greetings from Akin's Sunrise Secondary School. We are excited to provide you with access to our new Parent Portal where you can view your child's academic reports and stay updated on their progress.
-
-STUDENT INFORMATION:
-----------------------------------------
-Student Name: {student_name}
-Admission Number: {admission_no}
-Parent Email: {parent_email}
-
-LOGIN INSTRUCTIONS:
-----------------------------------------
-1. Visit the school management system
-2. Click on "Parent Portal" instead of "Staff Login"
-3. Enter your email address: {parent_email}
-4. Enter your child's admission number: {admission_no}
-5. Click "Access Portal" to view your child's reports
-
-WHAT YOU CAN ACCESS:
-----------------------------------------
-✓ View your child's academic reports
-✓ Download report cards in PDF format
-✓ Track academic progress over time
-✓ View attendance and performance metrics
-✓ Access school contact information
-
-SECURITY NOTE:
-----------------------------------------
-- Keep your login credentials secure
-- Only use the email address registered with the school
-- Contact us immediately if you experience any login issues
-
-For technical support or questions, please contact:
-📞 Phone: {school_phone}
-📧 Email: {school_email}
-
-Thank you for your continued trust in Akin's Sunrise Secondary School.
-
-Best regards,
-The Management
-AKIN'S SUNRISE SECONDARY SCHOOL
-
-===============================================
-This is an official communication from Akin's Sunrise Secondary School.
-Generated on {current_date}
-===============================================
-"""
-
-def send_parent_login_instructions(parent_email, student_name, admission_no):
-    """Send login instructions to parents"""
+def load_activation_config():
+    """Load activation system configuration"""
     try:
-        if not EMAIL_AVAILABLE:
-            return False, "Email functionality not available"
+        if os.path.exists("activation_config.json"):
+            with open("activation_config.json", 'r') as f:
+                return json.load(f)
+        return {
+            "monthly_amount": 20000,
+            "yearly_amount": 60000,
+            "currency": "NGN",
+            "bank_details": {
+                "bank_name": "First Bank Nigeria",
+                "account_name": "Bamstep Technologies",
+                "account_number": "1234567890",
+                "sort_code": "011"
+            },
+            "activation_enabled": True,
+            "trial_period_days": 30,
+            "grace_period_days": 7
+        }
+    except Exception:
+        return {}
 
-        email_config = load_email_config()
-        if not email_config:
-            return False, "Email not configured"
+def save_activation_config(config):
+    """Save activation system configuration"""
+    try:
+        with open("activation_config.json", 'w') as f:
+            json.dump(config, f, indent=2)
+        return True
+    except Exception:
+        return False
 
-        smtp_server = email_config.get("smtp_server")
-        smtp_port = email_config.get("smtp_port")
-        school_email = email_config.get("school_email")
-        email_password = email_config.get("email_password")
+def check_activation_status():
+    """Check if the system is activated"""
+    try:
+        config = load_activation_config()
 
-        if not all([smtp_server, smtp_port, school_email, email_password]):
-            return False, "Incomplete email configuration"
+        # Clear any cached activation state if activation was just enabled
+        if 'activation_check_done' in st.session_state:
+            del st.session_state.activation_check_done
 
-        # Load email templates and school config
-        email_templates = load_email_templates()
-        school_config = load_school_config()
+        # If activation is disabled in config, system is not activated regardless of other factors
+        if not config.get('activation_enabled', True):
+            return False, {"status": "activation_disabled"}, None
 
-        # Get template or use default
-        template = email_templates.get('login_instructions', {})
-        subject_template = template.get('subject', "Parent Portal Access - {student_name}")
-        body_template = template.get('body', get_default_login_instructions_template())
+        if os.path.exists("activation_status.json"):
+            with open("activation_status.json", 'r') as f:
+                status = json.load(f)
+                
+                # Check if the status indicates activation
+                if status.get('activated', False):
+                    activation_date = status.get('activation_date')
+                    if activation_date:
+                        activation_dt = datetime.datetime.fromisoformat(activation_date)
 
-        # Format subject
-        subject = subject_template.format(
-            student_name=student_name,
-            admission_no=admission_no,
-            parent_email=parent_email
-        )
+                        # Check if subscription is still valid
+                        if status.get('subscription_type') == 'monthly':
+                            expiry = activation_dt + datetime.timedelta(days=30)
+                        elif status.get('subscription_type') == 'yearly':
+                            expiry = activation_dt + datetime.timedelta(days=365)
+                        else:
+                            expiry = activation_dt + datetime.timedelta(days=30)
 
-        # Format body with placeholders
-        current_date = datetime.datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
-        school_phone = school_config.get('school_phone', "+234 800 123 4567")
-        school_email_address = school_config.get('school_email', "info@akinssunrise.edu.ng")
+                        grace_period = config.get('grace_period_days', 7)
+                        grace_expiry = expiry + datetime.timedelta(days=grace_period)
 
-        body = body_template.format(
-            student_name=student_name,
-            admission_no=admission_no,
-            parent_email=parent_email,
-            current_date=current_date,
-            school_phone=school_phone,
-            school_email=school_email_address
-        )
+                        if datetime.datetime.now() <= grace_expiry:
+                            return True, status, expiry
+                        else:
+                            return False, status, expiry
 
-        msg = MIMEMultipart()
-        msg['From'] = school_email
-        msg['To'] = parent_email
-        msg['Subject'] = subject
+        # Check trial period only if activation is enabled
+        trial_days = config.get('trial_period_days', 30)
 
-        msg.attach(MIMEText(body, 'plain'))
+        # Use creation date of users_database.json as trial start
+        if os.path.exists("users_database.json"):
+            stat = os.stat("users_database.json")
+            creation_time = datetime.datetime.fromtimestamp(stat.st_ctime)
+            trial_expiry = creation_time + datetime.timedelta(days=trial_days)
 
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(school_email, email_password)
-        text = msg.as_string()
-        server.sendmail(school_email, parent_email, text)
-        server.quit()
+            if datetime.datetime.now() <= trial_expiry:
+                return True, {"status": "trial", "trial_expiry": trial_expiry.isoformat()}, trial_expiry
 
-        return True, f"Login instructions sent successfully to {parent_email}"
-
+        return False, {}, None
     except Exception as e:
-        return False, f"Error sending instructions: {str(e)}"
+        print(f"Check activation status error: {e}")
+        return False, {}, None  # Default to not activated if there's an error
+
+def generate_activation_key():
+    """Generate a unique activation key"""
+    import secrets
+    import string
+
+    # Generate a 16-character activation key
+    characters = string.ascii_uppercase + string.digits
+    activation_key = ''.join(secrets.choice(characters) for _ in range(16))
+
+    # Format as XXXX-XXXX-XXXX-XXXX
+    formatted_key = '-'.join([activation_key[i:i+4] for i in range(0, 16, 4)])
+    return formatted_key
+
+def activate_system(activation_key, subscription_type="monthly"):
+    """Activate the system with provided key"""
+    try:
+        # Check if key format is valid
+        if len(activation_key.replace('-', '')) != 16:
+            return False
+
+        # Check if activation key exists and is not deactivated
+        key_found = False
+        key_deactivated = False
+        key_subscription_type = subscription_type
+
+        if os.path.exists("activation_records.json"):
+            try:
+                with open("activation_records.json", 'r') as f:
+                    records = json.load(f)
+
+                # Find the key in records
+                for record in records:
+                    if record.get('activation_key') == activation_key:
+                        key_found = True
+                        if record.get('status', 'generated') == 'deactivated':
+                            key_deactivated = True
+                        else:
+                            key_subscription_type = record.get('subscription_type', 'monthly')
+                        break
+
+                if not key_found:
+                    return False  # Key doesn't exist in records
+
+                if key_deactivated:
+                    return False  # Key has been deactivated
+
+            except:
+                # If we can't read records, allow basic validation to continue
+                key_found = True
+
+        # If no records file exists, accept any properly formatted key
+        if not os.path.exists("activation_records.json"):
+            key_found = True
+
+        if not key_found:
+            return False
+
+        activation_data = {
+            "activated": True,
+            "activation_date": datetime.datetime.now().isoformat(),
+            "activation_key": activation_key,
+            "subscription_type": key_subscription_type,
+            "activated_by": "system",
+            "activation_method": "key_input"
+        }
+
+        with open("activation_status.json", 'w') as f:
+            json.dump(activation_data, f, indent=2)
+
+        # Verify the file was written correctly
+        if os.path.exists("activation_status.json"):
+            try:
+                with open("activation_status.json", 'r') as f:
+                    test_data = json.load(f)
+                    return test_data.get('activated', False)
+            except:
+                return False
+
+        return True
+    except Exception as e:
+        print(f"Activation error: {e}")
+        return False
+
+def get_payment_instructions():
+    """Get payment instructions for activation"""
+    config = load_activation_config()
+    bank_details = config.get('bank_details', {})
+
+    return f"""
+    PAYMENT INSTRUCTIONS FOR SYSTEM ACTIVATION
+    ==========================================
+
+    Monthly Subscription: ₦{config.get('monthly_amount', 20000):,}
+    Yearly Subscription: ₦{config.get('yearly_amount', 60000):,}
+
+    BANK DETAILS:
+    Bank Name: {bank_details.get('bank_name', 'N/A')}
+    Account Name: {bank_details.get('account_name', 'N/A')}
+    Account Number: {bank_details.get('account_number', 'N/A')}
+    Sort Code: {bank_details.get('sort_code', 'N/A')}
+    """
+
+
+
+
 
 def send_report_email(parent_email, student_name, student_class, term, report_pdf_path, report_id):
     try:
@@ -1738,9 +1869,10 @@ def log_teacher_activity(teacher_id, activity_type, details):
     except Exception as e:
         return False
 
-def render_html_report(student_name, student_class, term, report_df, term_total, cumulative, final_grade, logo_base64, student_data=None, report_details=None):
+def render_html_report(student_name, student_class, term, report_df, term_total, cumulative, final_grade, logo_base64, student_data=None, report_details=None, report_id=None):
     date_now = datetime.datetime.now().strftime("%A, %B %d, %Y, %I:%M %p WAT")
-    report_id = generate_report_id()
+    if report_id is None:
+        report_id = generate_report_id()
     school_code = "ASS2025"
 
     # Calculate dynamic sizing based on number of subjects for A4 paper
@@ -2160,14 +2292,22 @@ def render_html_report(student_name, student_class, term, report_df, term_total,
 def apply_custom_css():
     st.markdown("""
     <style>
-    /* Adaptive theme support - works for both light and dark modes */
+    /* Main app container */
     .stApp {
-        color: var(--text-color);
+        max-width: 100vw;
+        overflow-x: hidden;
+    }
+
+    /* Animation for activation key display */
+    @keyframes shine {
+        0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
+        50% { transform: translateX(100%) translateY(100%) rotate(45deg); }
+        100% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
     }
 
     /* Text visibility for both themes */
     h1, h2, h3, h4, h5, h6 {
-        color: #1976D2 !important; /* Professional blue that works on both themes */
+        color: #1976D2 !important;
     }
 
     /* Button styling */
@@ -2175,8 +2315,11 @@ def apply_custom_css():
         background-color: #1976D2 !important;
         color: white !important;
         border: none !important;
-        border-radius: 6px !important;
+        border-radius: 8px !important;
+        padding: 0.5rem 1rem !important;
+        font-weight: 600 !important;
         transition: all 0.3s ease !important;
+        box-shadow: 0 2px 4px rgba(25, 118, 210, 0.2) !important;
     }
 
     .stButton button:hover {
@@ -2185,212 +2328,489 @@ def apply_custom_css():
         box-shadow: 0 4px 8px rgba(25, 118, 210, 0.3) !important;
     }
 
-    /* Tab styling with neutral colors */
+    /* Enhanced responsive tabs with premium styling and better sizing */
     .stTabs [data-baseweb="tab-list"] {
-        background-color: transparent !important;
-        border-bottom: 2px solid #E0E0E0 !important;
+        background: linear-gradient(135deg, rgba(25, 118, 210, 0.03) 0%, rgba(33, 150, 243, 0.05) 50%, rgba(25, 118, 210, 0.03) 100%) !important;
+        border: 2px solid rgba(25, 118, 210, 0.12) !important;
+        border-radius: 16px !important;
+        box-shadow: 0 8px 32px rgba(25, 118, 210, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
+        display: flex !important;
+        flex-wrap: wrap !important;
+        justify-content: center !important;
+        align-items: center !important;
+        padding: 16px !important;
+        margin: 24px auto !important;
+        width: 100% !important;
+        max-width: none !important;
+        overflow: visible !important;
+        overflow-x: auto !important;
+        backdrop-filter: blur(20px) !important;
+        position: relative !important;
+        min-height: 85px !important;
+        gap: 8px !important;
+    }
+
+    .stTabs [data-baseweb="tab-list"]::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
+        border-radius: 14px;
+        pointer-events: none;
+        z-index: 0;
     }
 
     .stTabs [data-baseweb="tab-list"] button {
-        background-color: transparent !important;
-        color: var(--text-color) !important;
-        border: none !important;
-        border-radius: 6px 6px 0 0 !important;
-        padding: 12px 24px !important;
-        font-weight: 500 !important;
-        transition: all 0.3s ease !important;
-        margin: 0 2px !important;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.8)) !important;
+        color: #374151 !important;
+        border: 2px solid rgba(25, 118, 210, 0.08) !important;
+        border-radius: 12px !important;
+        padding: 14px 20px !important;
+        margin: 4px !important;
+        font-weight: 600 !important;
+        font-size: 0.95rem !important;
+        line-height: 1.3 !important;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        backdrop-filter: blur(12px) !important;
+        flex: 0 0 auto !important;
+        min-width: 150px !important;
+        max-width: 220px !important;
+        text-align: center !important;
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        position: relative !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
+        z-index: 1 !important;
+        height: auto !important;
+        min-height: 50px !important;
+    }
+
+    .stTabs [data-baseweb="tab-list"] button::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: linear-gradient(135deg, rgba(25, 118, 210, 0.05), rgba(33, 150, 243, 0.08));
+        border-radius: 10px;
+        opacity: 0;
+        transition: all 0.4s ease;
+        z-index: -1;
+    }
+
+    .stTabs [data-baseweb="tab-list"] button::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 0;
+        height: 0;
+        background: radial-gradient(circle, rgba(25, 118, 210, 0.2), transparent 70%);
+        border-radius: 50%;
+        transform: translate(-50%, -50%);
+        transition: all 0.4s ease;
+        z-index: -1;
     }
 
     .stTabs [data-baseweb="tab-list"] button:hover {
-        background-color: rgba(25, 118, 210, 0.1) !important;
+        background: linear-gradient(135deg, rgba(25, 118, 210, 0.08), rgba(33, 150, 243, 0.05)) !important;
         color: #1976D2 !important;
+        border-color: rgba(25, 118, 210, 0.25) !important;
+        transform: translateY(-3px) scale(1.02) !important;
+        box-shadow: 0 8px 25px rgba(25, 118, 210, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
+    }
+
+    .stTabs [data-baseweb="tab-list"] button:hover::before {
+        opacity: 1;
+    }
+
+    .stTabs [data-baseweb="tab-list"] button:hover::after {
+        width: 100%;
+        height: 100%;
     }
 
     .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
-        background-color: #1976D2 !important;
+        background: linear-gradient(135deg, #1976D2 0%, #2196F3 50%, #42A5F5 100%) !important;
         color: white !important;
-        font-weight: 600 !important;
-        border-bottom: 3px solid #1565C0 !important;
+        border-color: #1565C0 !important;
+        font-weight: 700 !important;
+        transform: translateY(-3px) scale(1.05) !important;
+        box-shadow: 0 12px 32px rgba(25, 118, 210, 0.3), 0 4px 12px rgba(25, 118, 210, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
     }
 
-    /* Ensure tab text is always visible */
+    .stTabs [data-baseweb="tab-list"] button[aria-selected="true"]::before {
+        opacity: 0;
+    }
+
+    .stTabs [data-baseweb="tab-list"] button[aria-selected="true"]::after {
+        width: 100%;
+        height: 100%;
+        background: radial-gradient(circle, rgba(255, 255, 255, 0.1), transparent 70%);
+    }
+
+    /* Tab text visibility */
     .stTabs [data-baseweb="tab-list"] button * {
         color: inherit !important;
+        font-weight: inherit !important;
     }
 
-    /* Form elements adaptation */
+    /* Form elements */
     .stTextInput label, .stSelectbox label, .stNumberInput label, .stTextArea label {
         color: #1976D2 !important;
         font-weight: 600 !important;
+        margin-bottom: 0.5rem !important;
     }
 
-    /* Input fields */
     .stTextInput input, .stNumberInput input, .stTextArea textarea, .stSelectbox select {
-        border: 2px solid #E0E0E0 !important;
-        border-radius: 6px !important;
-        transition: border-color 0.3s ease !important;
+        border: 2px solid #e9ecef !important;
+        border-radius: 8px !important;
+        padding: 0.75rem !important;
+        transition: all 0.3s ease !important;
+        background: var(--background-color, rgba(255, 255, 255, 0.9)) !important;
+        color: var(--text-color, #333) !important;
     }
 
     .stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
         border-color: #1976D2 !important;
-        box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.2) !important;
+        box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1) !important;
+        outline: none !important;
+    }
+
+    /* Dark theme support for inputs */
+    [data-theme="dark"] .stTextInput input,
+    [data-theme="dark"] .stNumberInput input,
+    [data-theme="dark"] .stTextArea textarea,
+    [data-theme="dark"] .stSelectbox select {
+        background: rgba(45, 55, 72, 0.8) !important;
+        color: #e2e8f0 !important;
+        border-color: #4a5568 !important;
+    }
+
+    [data-theme="dark"] .stTextInput input:focus,
+    [data-theme="dark"] .stNumberInput input:focus,
+    [data-theme="dark"] .stTextArea textarea:focus {
+        border-color: #42A5F5 !important;
+        box-shadow: 0 0 0 3px rgba(66, 165, 245, 0.2) !important;
+    }
+
+    /* Alternative dark mode detection */
+    @media (prefers-color-scheme: dark) {
+        .stTextInput input,
+        .stNumberInput input,
+        .stTextArea textarea,
+        .stSelectbox select {
+            background: rgba(45, 55, 72, 0.9) !important;
+            color: #e2e8f0 !important;
+            border-color: #4a5568 !important;
+        }
+
+        .stTextInput input:focus,
+        .stNumberInput input:focus,
+        .stTextArea textarea:focus {
+            border-color: #42A5F5 !important;
+            box-shadow: 0 0 0 3px rgba(66, 165, 245, 0.2) !important;
+        }
+
+        .stTextInput input::placeholder,
+        .stNumberInput input::placeholder,
+        .stTextArea textarea::placeholder {
+            color: #a0aec0 !important;
+        }
     }
 
     /* Metrics styling */
     .metric-container {
-        background: linear-gradient(135deg, rgba(25, 118, 210, 0.1), rgba(25, 118, 210, 0.05)) !important;
+        background: linear-gradient(135deg, rgba(25, 118, 210, 0.05), rgba(33, 150, 243, 0.05)) !important;
         border: 1px solid rgba(25, 118, 210, 0.2) !important;
+        border-radius: 12px !important;
+        padding: 1.5rem !important;
+        backdrop-filter: blur(10px) !important;
+    }
+
+    /* Message styling */
+    .stSuccess {
+        background: linear-gradient(135deg, rgba(76, 175, 80, 0.1), rgba(129, 199, 132, 0.1)) !important;
+        border: 1px solid #4CAF50 !important;
         border-radius: 8px !important;
         padding: 1rem !important;
     }
 
-    /* Success/Error/Warning messages */
-    .stSuccess {
-        background-color: rgba(76, 175, 80, 0.1) !important;
-        border: 1px solid #4CAF50 !important;
-        color: #1976D2 !important;
-    }
-
     .stError {
-        background-color: rgba(244, 67, 54, 0.1) !important;
+        background: linear-gradient(135deg, rgba(244, 67, 54, 0.1), rgba(229, 115, 115, 0.1)) !important;
         border: 1px solid #F44336 !important;
-        color: #C62828 !important;
+        border-radius: 8px !important;
+        padding: 1rem !important;
     }
 
     .stWarning {
-        background-color: rgba(255, 152, 0, 0.1) !important;
+        background: linear-gradient(135deg, rgba(255, 152, 0, 0.1), rgba(255, 183, 77, 0.1)) !important;
         border: 1px solid #FF9800 !important;
-        color: #E65100 !important;
+        border-radius: 8px !important;
+        padding: 1rem !important;
     }
 
     .stInfo {
-        background-color: rgba(33, 150, 243, 0.1) !important;
+        background: linear-gradient(135deg, rgba(33, 150, 243, 0.1), rgba(100, 181, 246, 0.1)) !important;
         border: 1px solid #2196F3 !important;
-        color: #1565C0 !important;
+        border-radius: 8px !important;
+        padding: 1rem !important;
     }
 
     /* Expander styling */
     .streamlit-expanderHeader {
-        background-color: rgba(25, 118, 210, 0.05) !important;
+        background: linear-gradient(135deg, rgba(25, 118, 210, 0.05), rgba(33, 150, 243, 0.05)) !important;
         border: 1px solid rgba(25, 118, 210, 0.2) !important;
-        border-radius: 6px !important;
+        border-radius: 8px !important;
         color: #1976D2 !important;
         font-weight: 600 !important;
+        padding: 1rem !important;
     }
 
-    /* DataFrame styling */
-    .stDataFrame {
-        border: 1px solid #E0E0E0 !important;
-        border-radius: 6px !important;
-        overflow: hidden !important;
-    }
-
-    /* Sidebar (if used) */
-    .css-1d391kg {
-        background-color: rgba(25, 118, 210, 0.02) !important;
-    }
-
-    /* File uploader */
-    .stFileUploader {
-        border: 2px dashed #1976D2 !important;
-        border-radius: 8px !important;
-        background-color: rgba(25, 118, 210, 0.05) !important;
-    }
-
-    /* Download button */
-    .stDownloadButton button {
-        background-color: #1976D2 !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 6px !important;
-    }
-
-    .stDownloadButton button:hover {
-        background-color: #1565C0 !important;
-    }
-
-    /* Cards and containers */
-    .element-container {
-        border-radius: 8px !important;
-    }
-
-    /* Mobile responsiveness */
+    /* Enhanced mobile responsiveness with better tab sizing */
     @media (max-width: 768px) {
         .main > div {
-            padding-left: 1rem;
-            padding-right: 1rem;
+            padding: 0.5rem !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            padding: 12px !important;
+            margin: 15px 0 !important;
+            flex-wrap: wrap !important;
+            justify-content: center !important;
+            gap: 6px !important;
+            border-radius: 12px !important;
+            width: 100% !important;
+            overflow-x: auto !important;
+            overflow-y: visible !important;
+            min-height: 100px !important;
         }
 
         .stTabs [data-baseweb="tab-list"] button {
-            padding: 8px 16px !important;
-            font-size: 0.9rem !important;
+            padding: 12px 16px !important;
+            font-size: 0.85rem !important;
+            line-height: 1.2 !important;
+            margin: 3px !important;
+            min-width: 130px !important;
+            max-width: 160px !important;
+            flex: 0 0 auto !important;
+            border-radius: 10px !important;
+            white-space: normal !important;
+            height: auto !important;
+            min-height: 45px !important;
         }
 
-        div[data-testid="column"] {
-            min-width: 0 !important;
-            flex: 1;
+        .stTabs [data-baseweb="tab-list"] button:hover {
+            transform: translateY(-2px) scale(1.01) !important;
         }
 
-        .stButton > button {
-            width: 100%;
-            margin-bottom: 0.5rem;
+        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
+            transform: translateY(-2px) scale(1.03) !important;
         }
 
         h1 {
-            font-size: 1.5rem !important;
+            font-size: 1.8rem !important;
+            text-align: center !important;
         }
 
         h2 {
-            font-size: 1.3rem !important;
+            font-size: 1.4rem !important;
         }
 
         h3 {
-            font-size: 1.1rem !important;
+            font-size: 1.2rem !important;
+        }
+
+        .stButton > button {
+            width: 100% !important;
+            margin-bottom: 0.5rem !important;
         }
     }
 
-    /* Tablet responsiveness */
+    /* Enhanced tablet responsiveness with improved tab display */
     @media (min-width: 769px) and (max-width: 1024px) {
         .main > div {
-            padding-left: 2rem;
-            padding-right: 2rem;
+            padding: 1rem !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] {
+            padding: 14px !important;
+            flex-wrap: wrap !important;
+            justify-content: center !important;
+            gap: 8px !important;
+            width: 100% !important;
+            overflow-x: auto !important;
+            min-height: 90px !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] button {
+            padding: 13px 18px !important;
+            font-size: 0.9rem !important;
+            line-height: 1.3 !important;
+            margin: 3px !important;
+            min-width: 140px !important;
+            max-width: 180px !important;
+            flex: 0 0 auto !important;
+            white-space: normal !important;
+            height: auto !important;
+            min-height: 48px !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] button:hover {
+            transform: translateY(-2px) scale(1.01) !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
+            transform: translateY(-2px) scale(1.03) !important;
         }
     }
 
-    /* Chart containers */
-    .chart-container {
-        background: rgba(25, 118, 210, 0.02);
-        border-radius: 8px;
-        padding: 1rem;
-        margin: 1rem 0;
-        border: 1px solid rgba(25, 118, 210, 0.1);
+    /* Enhanced large screens with better tab sizing */
+    @media (min-width: 1025px) {
+        .stTabs [data-baseweb="tab-list"] {
+            flex-wrap: wrap !important;
+            justify-content: center !important;
+            gap: 10px !important;
+            width: 100% !important;
+            overflow-x: visible !important;
+            padding: 18px !important;
+            min-height: 88px !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] button {
+            flex: 0 0 auto !important;
+            max-width: 200px !important;
+            min-width: 160px !important;
+            padding: 15px 22px !important;
+            font-size: 1rem !important;
+            line-height: 1.3 !important;
+            white-space: normal !important;
+            height: auto !important;
+            min-height: 52px !important;
+        }
     }
 
-    /* Improved text contrast for accessibility */
+    /* Ultra-wide screens with even better spacing */
+    @media (min-width: 1400px) {
+        .stTabs [data-baseweb="tab-list"] {
+            max-width: 1300px !important;
+            padding: 20px !important;
+            gap: 12px !important;
+            min-height: 92px !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] button {
+            max-width: 240px !important;
+            min-width: 180px !important;
+            padding: 16px 24px !important;
+            font-size: 1.05rem !important;
+            line-height: 1.4 !important;
+            min-height: 55px !important;
+        }
+    }
+
+    /* Dark theme support */
+    @media (prefers-color-scheme: dark) {
+        .stTabs [data-baseweb="tab-list"] {
+            background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%) !important;
+            border-color: #4a5568 !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] button {
+            background: rgba(45, 55, 72, 0.8) !important;
+            color: #e2e8f0 !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] button:hover {
+            background: rgba(25, 118, 210, 0.2) !important;
+        }
+
+        /* Form labels in dark mode */
+        .stTextInput label, .stSelectbox label, .stNumberInput label, .stTextArea label {
+            color: #42A5F5 !important;
+        }
+
+        /* Expander styling in dark mode */
+        .streamlit-expanderHeader {
+            background: linear-gradient(135deg, rgba(45, 55, 72, 0.8), rgba(74, 85, 104, 0.6)) !important;
+            border: 1px solid rgba(66, 165, 245, 0.3) !important;
+            color: #42A5F5 !important;
+        }
+
+        /* Metric containers in dark mode */
+        .metric-container {
+            background: linear-gradient(135deg, rgba(45, 55, 72, 0.8), rgba(74, 85, 104, 0.6)) !important;
+            border: 1px solid rgba(66, 165, 245, 0.3) !important;
+        }
+
+        /* Message boxes in dark mode */
+        .stSuccess {
+            background: linear-gradient(135deg, rgba(76, 175, 80, 0.2), rgba(129, 199, 132, 0.2)) !important;
+            border: 1px solid rgba(76, 175, 80, 0.5) !important;
+        }
+
+        .stError {
+            background: linear-gradient(135deg, rgba(244, 67, 54, 0.2), rgba(229, 115, 115, 0.2)) !important;
+            border: 1px solid rgba(244, 67, 54, 0.5) !important;
+        }
+
+        .stWarning {
+            background: linear-gradient(135deg, rgba(255, 152, 0, 0.2), rgba(255, 183, 77, 0.2)) !important;
+            border: 1px solid rgba(255, 152, 0, 0.5) !important;
+        }
+
+        .stInfo {
+            background: linear-gradient(135deg, rgba(33, 150, 243, 0.2), rgba(100, 181, 246, 0.2)) !important;
+            border: 1px solid rgba(33, 150, 243, 0.5) !important;
+        }
+    }
+
+    /* High contrast mode */
+    @media (prefers-contrast: high) {
+        .stTabs [data-baseweb="tab-list"] button {
+            border-width: 3px !important;
+        }
+
+        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
+            border-width: 4px !important;
+        }
+    }
+
+    /* Custom scrollbar for mobile tab overflow */
+    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {
+        height: 4px;
+    }
+
+    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar-track {
+        background: rgba(0, 0, 0, 0.1);
+        border-radius: 2px;
+    }
+
+    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar-thumb {
+        background: #1976D2;
+        border-radius: 2px;
+    }
+
+    /* Improved visual hierarchy */
     .stMarkdown strong {
         color: #1976D2 !important;
         font-weight: 700 !important;
     }
 
-    /* Dark theme specific adjustments */
-    @media (prefers-color-scheme: dark) {
-        .stTabs [data-baseweb="tab-list"] {
-            border-bottom: 2px solid #404040 !important;
-        }
-
-        .stTextInput input, .stNumberInput input, .stTextArea textarea {
-            background-color: var(--background-color) !important;
-            color: var(--text-color) !important;
-        }
+    /* Better spacing for content */
+    .element-container {
+        margin-bottom: 1rem !important;
     }
 
-    /* Light theme specific adjustments */
-    @media (prefers-color-scheme: light) {
-        .stTextInput input, .stNumberInput input, .stTextArea textarea {
-            background-color: white !important;
-            color: #333333 !important;
-        }
+    /* Header improvements */
+    .main .block-container {
+        padding-top: 2rem !important;
+        max-width: 100% !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -2417,13 +2837,22 @@ def update_session_activity():
 
 def login_page():
     st.set_page_config(
-        page_title="Akin's Sunrise School - Login", 
+        page_title="Akin's Sunrise School – Report Card System", 
         layout="centered",
         initial_sidebar_state="collapsed",
         page_icon="🎓"
     )
 
     apply_custom_css()
+
+    # Always do a fresh check of activation status (don't cache)
+    is_activated, activation_status, expiry_date = check_activation_status()
+    config = load_activation_config()
+
+    # Force activation requirement for ALL users when activation is enabled
+    if not is_activated:
+        show_activation_required_page()
+        return
 
     logo_base64 = get_logo_base64()
     if logo_base64:
@@ -2435,18 +2864,463 @@ def login_page():
 
     st.markdown("""
     <div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="color: var(--accent-color); margin: 10px 0;">🔐 Secure Login</h1>
+        <h1 style="color: var(--accent-color); margin: 10px 0;">🔐 Staff Login</h1>
         <h2 style="color: var(--text-secondary); margin: 5px 0;">Akin's Sunrise School System</h2>
     </div>
     """, unsafe_allow_html=True)
 
-    # Login type selection
-    login_type = st.selectbox("Login Type", ["Staff Login", "Parent Portal"], key="login_type")
+    # Show activation key info if available (but not just generated)
+    if st.session_state.get('generated_activation_key') and not st.session_state.get('just_generated'):
+        st.info(f"🔑 Activation key available for {st.session_state.get('generated_for_school', 'School')}")
+        if st.button("🔍 View Activation Key"):
+            st.session_state.just_generated = True
+            st.rerun()
 
-    if login_type == "Staff Login":
-        staff_login_form()
-    else:
-        parent_login_form()
+    # Show activation status if activated
+    if is_activated:
+        if activation_status.get('status') == 'trial':
+            trial_expiry = datetime.datetime.fromisoformat(activation_status['trial_expiry'])
+            days_left = (trial_expiry - datetime.datetime.now()).days
+            if days_left > 0:
+                st.info(f"🆓 Trial Period: {days_left} days remaining")
+            else:
+                st.warning("🕐 Trial period expired - Grace period active")
+        else:
+            if expiry_date:
+                days_until_expiry = (expiry_date - datetime.datetime.now()).days
+                if days_until_expiry > 7:
+                    st.success(f"✅ System Activated - {days_until_expiry} days remaining")
+                elif days_until_expiry > 0:
+                    st.warning(f"⚠️ Subscription expires in {days_until_expiry} days")
+                else:
+                    st.error("🚨 Subscription expired - Grace period active")
+
+    staff_login_form()
+
+def show_activation_required_page():
+    """Show activation required page with payment instructions"""
+    # Display school logo at the top
+    logo_base64 = get_logo_base64()
+    if logo_base64:
+        st.markdown(f"""
+        <div style="text-align: center; margin-bottom: 20px;">
+            <img src="data:image/png;base64,{logo_base64}" style="width: 120px; height: 120px; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style="text-align: center; margin-bottom: 30px;">
+        <h1 style="color: #ff6b6b; margin: 10px 0;">🔒 System Activation Required</h1>
+        <h2 style="color: var(--text-secondary); margin: 5px 0;">Akin's Sunrise School System</h2>
+    </div>
+    """, unsafe_allow_html=True)
+
+    config = load_activation_config()
+    is_activated, activation_status, expiry_date = check_activation_status()
+
+    # Show specific message if activation was disabled
+    if activation_status.get('status') == 'activation_disabled':
+        st.error("🚨 **SYSTEM DEACTIVATED**")
+        st.warning("⚠️ The system activation has been disabled. A new activation key must be generated and activated to continue using the system.")
+        st.info("🔄 This applies to all users including administrators.")
+
+    # Show generated activation key prominently at the top if just generated
+    if st.session_state.get('generated_activation_key') and st.session_state.get('just_generated'):
+        st.markdown("---")
+        st.balloons()
+        st.markdown("## 🎉 Activation Key Successfully Generated!")
+
+        # Enhanced activation key display
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #4CAF50, #45a049); 
+            border: 4px solid #2e7d32; 
+            border-radius: 20px; 
+            padding: 30px; 
+            text-align: center; 
+            margin: 20px 0;
+            box-shadow: 0 8px 32px rgba(76, 175, 80, 0.3);
+            position: relative;
+            overflow: hidden;
+        ">
+            <div style="
+                position: absolute;
+                top: -50%;
+                left: -50%;
+                width: 200%;
+                height: 200%;
+                background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+                animation: shine 3s ease-in-out infinite;
+            "></div>
+            <div style="position: relative; z-index: 1;">
+                <h2 style="
+                    color: white; 
+                    margin: 0 0 15px 0; 
+                    font-size: 28px; 
+                    font-weight: bold;
+                    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+                ">🔑 ACTIVATION KEY GENERATED</h2>
+                <div style="
+                    background: rgba(255,255,255,0.95); 
+                    border-radius: 15px; 
+                    padding: 20px; 
+                    margin: 15px 0;
+                    box-shadow: inset 0 2px 10px rgba(0,0,0,0.1);
+                ">
+                    <p style="
+                        color: #2e7d32; 
+                        margin: 0 0 10px 0; 
+                        font-weight: bold; 
+                        font-size: 18px;
+                    ">School: {st.session_state.get('generated_for_school', 'School')}</p>
+                    <div style="
+                        font-family: 'Courier New', monospace; 
+                        font-size: 36px; 
+                        font-weight: bold; 
+                        color: #1565C0; 
+                        letter-spacing: 4px;
+                        text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+                        margin: 15px 0;
+                        padding: 15px;
+                        background: linear-gradient(145deg, #f0f8ff, #e3f2fd);
+                        border-radius: 10px;
+                        border: 2px dashed #1976D2;
+                    ">{st.session_state.generated_activation_key}</div>
+                </div>
+                <p style="
+                    color: white; 
+                    margin: 15px 0 0 0; 
+                    font-weight: 600;
+                    font-size: 16px;
+                    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+                ">📋 Copy this key and share it with the school administration</p>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Action buttons for the generated key
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            if st.button("📋 Copy Key to Clipboard", use_container_width=True, type="primary"):
+                st.success("✅ Key copied! You can now paste it where needed.")
+        with col2:
+            if st.button("📧 Generate New Key", use_container_width=True):
+                # Clear current key to allow generation of new one
+                if 'generated_activation_key' in st.session_state:
+                    del st.session_state.generated_activation_key
+                if 'generated_for_school' in st.session_state:
+                    del st.session_state.generated_for_school
+                if 'just_generated' in st.session_state:
+                    del st.session_state.just_generated
+                st.info("✨ Current key cleared. Generate a new one below.")
+                st.rerun()
+        with col3:
+            if st.button("✅ Continue to Login", use_container_width=True):
+                # Keep the key but mark as no longer just generated
+                st.session_state.just_generated = False
+                st.rerun()
+
+        st.markdown("---")
+
+    st.error("🚨 This system requires activation to continue.")
+
+    st.markdown("### 🏦 Payment Instructions")
+    st.code(get_payment_instructions())
+
+    # Activation key input (only for teacher_bamstep)
+    st.markdown("### 🔑 System Activation")
+
+    # Show developer access
+    dev_user = st.text_input("Developer Access", type="password", placeholder="Enter developer credentials")
+    if dev_user == "Stephen@22":
+        st.success("✅ Developer access granted!")
+
+        with st.expander("🔧 Developer Activation Panel", expanded=True):
+            st.markdown("#### Generate Activation Key")
+
+            subscription_type = st.selectbox("Subscription Type", ["monthly", "yearly"])
+            school_name = st.text_input("School Name (for records)")
+            payment_confirmed = st.checkbox("✅ Payment confirmed and verified")
+
+            if st.button("🔑 Generate Activation Key") and payment_confirmed:
+                activation_key = generate_activation_key()
+
+                # Save activation record
+                activation_record = {
+                    "activation_key": activation_key,
+                    "school_name": school_name,
+                    "subscription_type": subscription_type,
+                    "generated_date": datetime.datetime.now().isoformat(),
+                    "generated_by": "teacher_bamstep",
+                    "amount": config.get(f'{subscription_type}_amount', 20000),
+                    "status": "generated"
+                }
+
+                # Load existing records
+                records = []
+                if os.path.exists("activation_records.json"):
+                    try:
+                        with open("activation_records.json", 'r') as f:
+                            records = json.load(f)
+                    except:
+                        records = []
+
+                records.append(activation_record)
+
+                # Save updated records
+                with open("activation_records.json", 'w') as f:
+                    json.dump(records, f, indent=2)
+
+                # Auto-enable activation when generating new key
+                config['activation_enabled'] = True
+                save_activation_config(config)
+
+                # Store activation key in session state to show on this page
+                st.session_state.generated_activation_key = activation_key
+                st.session_state.generated_for_school = school_name
+                st.session_state.just_generated = True
+
+                st.success(f"🎉 Activation key generated for {school_name}! System activation is now enabled.")
+                st.rerun()
+
+        # Show activation records with management options
+        if os.path.exists("activation_records.json"):
+            with st.expander("📋 Activation Key Management", expanded=False):
+                try:
+                    with open("activation_records.json", 'r') as f:
+                        records = json.load(f)
+
+                    if records:
+                        st.markdown("#### Active Activation Keys")
+                        for i, record in enumerate(records[-15:]):  # Show last 15
+                            col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+
+                            key_status = record.get('status', 'generated')
+                            is_deactivated = key_status == 'deactivated'
+
+                            with col1:
+                                if is_deactivated:
+                                    st.write(f"~~**{record.get('school_name', 'Unknown')}**~~ (DEACTIVATED)")
+                                    st.write(f"~~Key: `{record.get('activation_key', 'N/A')}`~~")
+                                else:
+                                    st.write(f"**{record.get('school_name', 'Unknown')}**")
+                                    st.write(f"Key: `{record.get('activation_key', 'N/A')}`")
+
+                            with col2:
+                                st.write(f"Type: {record.get('subscription_type', 'monthly')}")
+                                st.write(f"Amount: ₦{record.get('amount', 0):,}")
+
+                            with col3:
+                                generated_date = record.get('generated_date', '')
+                                if generated_date:
+                                    try:
+                                        date_obj = datetime.datetime.fromisoformat(generated_date)
+                                        st.write(f"Date: {date_obj.strftime('%Y-%m-%d')}")
+                                    except:
+                                        st.write(f"Date: {generated_date}")
+
+                                if is_deactivated:
+                                    st.error("🚫 DEACTIVATED")
+                                else:
+                                    st.success("✅ ACTIVE")
+
+                            with col4:
+                                if not is_deactivated:
+                                    if st.button(f"🚫 Deactivate", key=f"deactivate_{i}_{record.get('activation_key', '')}"):
+                                        # Deactivate the key
+                                        records[-(15-i)]['status'] = 'deactivated'
+                                        records[-(15-i)]['deactivated_date'] = datetime.datetime.now().isoformat()
+                                        records[-(15-i)]['deactivated_by'] = 'teacher_bamstep'
+
+                                        # Save updated records
+                                        with open("activation_records.json", 'w') as f:
+                                            json.dump(records, f, indent=2)
+
+                                        # Also deactivate system if this key was used
+                                        activation_key = record.get('activation_key', '')
+                                        if os.path.exists("activation_status.json"):
+                                            try:
+                                                with open("activation_status.json", 'r') as f:
+                                                    status = json.load(f)
+                                                if status.get('activation_key') == activation_key:
+                                                    # Remove activation status to deactivate system
+                                                    os.remove("activation_status.json")
+                                                    st.success(f"🚫 Key deactivated and system access revoked!")
+                                                else:
+                                                    st.success(f"🚫 Key deactivated!")
+                                            except:
+                                                st.success(f"🚫 Key deactivated!")
+                                        else:
+                                            st.success(f"🚫 Key deactivated!")
+
+                                        st.rerun()
+                                else:
+                                    if st.button(f"🔄 Reactivate", key=f"reactivate_{i}_{record.get('activation_key', '')}"):
+                                        # Reactivate the key
+                                        records[-(15-i)]['status'] = 'generated'
+                                        if 'deactivated_date' in records[-(15-i)]:
+                                            del records[-(15-i)]['deactivated_date']
+                                        if 'deactivated_by' in records[-(15-i)]:
+                                            del records[-(15-i)]['deactivated_by']
+
+                                        # Save updated records
+                                        with open("activation_records.json", 'w') as f:
+                                            json.dump(records, f, indent=2)
+
+                                        st.success(f"✅ Key reactivated!")
+                                        st.rerun()
+
+                        # Add bulk deactivation option
+                        st.markdown("---")
+                        st.markdown("#### 🚫 Bulk Key Management")
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            if st.button("🚫 Deactivate All Active Keys"):
+                                deactivated_count = 0
+                                for record in records:
+                                    if record.get('status', 'generated') != 'deactivated':
+                                        record['status'] = 'deactivated'
+                                        record['deactivated_date'] = datetime.datetime.now().isoformat()
+                                        record['deactivated_by'] = 'teacher_bamstep'
+                                        deactivated_count += 1
+
+                                # Save updated records
+                                with open("activation_records.json", 'w') as f:
+                                    json.dump(records, f, indent=2)
+
+                                # Also remove current system activation
+                                if os.path.exists("activation_status.json"):
+                                    os.remove("activation_status.json")
+
+                                st.success(f"🚫 Deactivated {deactivated_count} keys and revoked system access!")
+                                st.rerun()
+
+                        with col2:
+                            if st.button("🔄 Reactivate All Keys"):
+                                reactivated_count = 0
+                                for record in records:
+                                    if record.get('status', 'generated') == 'deactivated':
+                                        record['status'] = 'generated'
+                                        if 'deactivated_date' in record:
+                                            del record['deactivated_date']
+                                        if 'deactivated_by' in record:
+                                            del record['deactivated_by']
+                                        reactivated_count += 1
+
+                                # Save updated records
+                                with open("activation_records.json", 'w') as f:
+                                    json.dump(records, f, indent=2)
+
+                                st.success(f"✅ Reactivated {reactivated_count} keys!")
+                                st.rerun()
+
+                    else:
+                        st.info("No activation records found.")
+                except:
+                    st.error("Error loading activation records.")
+
+    # Activation key input for schools
+    st.markdown("---")
+    st.markdown("#### 🔐 Enter Activation Key")
+
+    activation_key = st.text_input("Activation Key", placeholder="XXXX-XXXX-XXXX-XXXX", key="activation_key_input")
+
+    if st.button("🚀 Activate System", key="activate_system_btn") and activation_key:
+        with st.spinner("Activating system..."):
+            if activate_system(activation_key):
+                st.success("🎉 System activated successfully!")
+                st.balloons()
+                # Clear any generated key session states
+                if 'generated_activation_key' in st.session_state:
+                    del st.session_state.generated_activation_key
+                if 'generated_for_school' in st.session_state:
+                    del st.session_state.generated_for_school
+                if 'just_generated' in st.session_state:
+                    del st.session_state.just_generated
+                # Clear activation-related session states to force fresh check
+                if 'activation_check_done' in st.session_state:
+                    del st.session_state.activation_check_done
+                
+                st.info("🔄 Redirecting to login page...")
+                # Wait a moment then rerun
+                import time
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("❌ Invalid activation key. Please check and try again.")
+                st.info("💡 Make sure you're entering the correct activation key format: XXXX-XXXX-XXXX-XXXX")
+
+    st.markdown("---")
+    st.markdown("#### 📞 Contact Support")
+
+    # Allow teacher_bamstep to edit contact support
+    if dev_user == "Stephen@22":
+        with st.expander("✏️ Edit Contact Support Info", expanded=False):
+            support_config = {}
+            if os.path.exists("support_config.json"):
+                try:
+                    with open("support_config.json", 'r') as f:
+                        support_config = json.load(f)
+                except:
+                    support_config = {}
+
+            with st.form("support_config_form"):
+                support_contact = st.text_input("Support Contact Name", 
+                                               value=support_config.get('contact_name', 'teacher_bamstep'))
+                support_email = st.text_input("Support Email", 
+                                            value=support_config.get('email', 'bamstep@akinssunrise.edu.ng'))
+                support_phone = st.text_input("Support Phone", 
+                                            value=support_config.get('phone', '+234 800 123 4567'))
+                support_message = st.text_area("Support Message", 
+                                             value=support_config.get('message', 'Please have your payment receipt ready when contacting support.'))
+
+                if st.form_submit_button("💾 Save Support Info"):
+                    new_support_config = {
+                        'contact_name': support_contact,
+                        'email': support_email,
+                        'phone': support_phone,
+                        'message': support_message,
+                        'updated_by': 'Stephen@22',
+                        'updated_date': datetime.datetime.now().isoformat()
+                    }
+
+                    with open("support_config.json", 'w') as f:
+                        json.dump(new_support_config, f, indent=2)
+
+                    st.success("✅ Support information updated!")
+                    st.rerun()
+
+    # Load and display support info
+    support_config = {}
+    if os.path.exists("support_config.json"):
+        try:
+            with open("support_config.json", 'r') as f:
+                support_config = json.load(f)
+        except:
+            support_config = {}
+
+    contact_name = support_config.get('contact_name', 'teacher_bamstep')
+    contact_email = support_config.get('email', 'bamstep@akinssunrise.edu.ng')
+    contact_phone = support_config.get('phone', '+234 800 123 4567')
+    contact_hours = support_config.get('hours', 'Monday - Friday, 9:00 AM - 5:00 PM')
+    contact_message = support_config.get('message', 'Please have your payment receipt ready when contacting support.')
+    contact_instructions = support_config.get('instructions', 'For activation issues, please provide your school name and payment confirmation.')
+
+    st.info(f"""
+**Need help with activation?**
+
+📞 **Contact:** {contact_name}
+📧 **Email:** {contact_email}
+📱 **Phone:** {contact_phone}
+🕐 **Hours:** {contact_hours}
+
+**Support Message:**
+{contact_message}
+
+**Instructions:**
+{contact_instructions}
+    """)
 
 def staff_login_form():
     """Staff login form with enhanced security"""
@@ -2504,55 +3378,7 @@ def staff_login_form():
                 else:
                     st.warning("⚠️ Please enter both User ID and Password.")
 
-def parent_login_form():
-    """Parent portal login form"""
-    with st.container():
-        st.markdown("### Parent Portal Access")
-        st.markdown("Parents can view their child's academic reports and communicate with teachers.")
 
-        parent_email = st.text_input("Parent Email", placeholder="Enter your registered email")
-        student_admission_no = st.text_input("Student Admission Number", placeholder="Enter your child's admission number")
-
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
-            if st.button("🚀 Access Portal", use_container_width=True):
-                if parent_email and student_admission_no:
-                    # Verify parent-student relationship
-                    students = get_all_students()
-                    matching_student = None
-                    encryption_key = generate_encryption_key("akins_sunrise_school_encryption")
-
-                    for student in students:
-                        stored_email = student.get('parent_email', '')
-                        stored_admission = student.get('admission_no', '')
-
-                        # Decrypt email if encrypted
-                        if student.get('data_encrypted', False) and stored_email:
-                            try:
-                                stored_email = decrypt_data(stored_email, encryption_key)
-                            except:
-                                continue
-
-                        # Compare with case-insensitive and trimmed strings
-                        email_match = stored_email.lower().strip() == parent_email.lower().strip()
-                        admission_match = stored_admission.strip() == student_admission_no.strip()
-
-                        if email_match and admission_match:
-                            matching_student = student
-                            break
-
-                    if matching_student:
-                        st.session_state.authenticated = True
-                        st.session_state.user_type = "parent"
-                        st.session_state.parent_email = parent_email
-                        st.session_state.child_data = matching_student
-                        st.success(f"✅ Welcome! Access granted for {matching_student['student_name']}")
-                        st.rerun()
-                    else:
-                        st.error("❌ Invalid credentials or no matching student found.")
-                        st.info("💡 Make sure you're using the exact email and admission number registered with the school.")
-                else:
-                    st.warning("⚠️ Please enter both email and admission number.")
 
 def two_factor_verification():
     """Two-factor authentication verification"""
@@ -2614,7 +3440,7 @@ def draft_reports_tab():
 
     # Get drafts for current teacher or all (if admin)
     is_admin = check_user_permissions(st.session_state.teacher_id, "system_config")
-    
+
     if is_admin:
         view_option = st.selectbox("View Drafts", ["My Drafts Only", "All Drafts"], key="draft_view_option")
         if view_option == "My Drafts Only":
@@ -2637,7 +3463,7 @@ def draft_reports_tab():
                     st.write(f"**Term:** {draft.get('term', 'N/A')}")
                     st.write(f"**Teacher:** {draft.get('teacher_id', 'N/A')}")
                     st.write(f"**Completion:** {draft.get('completion_status', '0')}%")
-                    
+
                     # Show last modified
                     last_modified = draft.get('last_modified', '')
                     if last_modified:
@@ -2674,7 +3500,7 @@ def draft_reports_tab():
         if is_admin and len(draft_reports) > 1:
             st.markdown("---")
             st.markdown("#### 🗑️ Bulk Operations")
-            
+
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("🗑️ Delete All My Drafts"):
@@ -2712,28 +3538,28 @@ def report_generator_tab():
     if st.session_state.get('load_draft_data'):
         draft_data = st.session_state.load_draft_data
         st.info(f"📄 Loaded draft for {draft_data.get('student_name', 'Unknown')} - Continue editing below")
-        
+
         # Pre-fill form with draft data
         st.session_state.student_name = draft_data.get('student_name', '')
         st.session_state.student_class = draft_data.get('student_class', '')
         st.session_state.term = draft_data.get('term', '1st Term')
         st.session_state.parent_email = draft_data.get('parent_email', '')
-        
+
         # Load subject scores
         draft_scores = draft_data.get('subject_scores', {})
         for subject, scores in draft_scores.items():
             st.session_state[f"{subject}_ca"] = scores.get('ca', 0)
             st.session_state[f"{subject}_exam"] = scores.get('exam', 0)
             st.session_state[f"{subject}_last"] = scores.get('last_cumulative', 0)
-        
+
         # Load selected subjects
         st.session_state.selected_subjects = list(draft_scores.keys())
-        
+
         # Load additional details if present
         additional_data = draft_data.get('additional_data', {})
         for key, value in additional_data.items():
             st.session_state[key] = value
-            
+
         # Clear the load flag
         del st.session_state.load_draft_data
 
@@ -2755,7 +3581,7 @@ def report_generator_tab():
 
     st.markdown("---")
     st.markdown("#### 📧 Parent Communication & Report Details")
-    
+
     col1, col2 = st.columns(2)
     with col1:
         parent_email = st.text_input("📧 Parent's Email Address", key="parent_email", 
@@ -2858,7 +3684,14 @@ def report_generator_tab():
         last_cumulative = st.number_input(f"{subject} - Last Term Cumulative", min_value=0, max_value=100, key=f"{subject}_last")
 
         total = calculate_total(ca, exam)
-        subject_cumulative = (total + last_cumulative) / 2
+        
+        # For 1st term, cumulative is same as current term total
+        if term == "1st Term":
+            subject_cumulative = total
+        else:
+            # For 2nd and 3rd terms, average with previous cumulative
+            subject_cumulative = (total + last_cumulative) / 2
+            
         total_term_score += total
         all_cumulatives.append(subject_cumulative)
 
@@ -2866,7 +3699,7 @@ def report_generator_tab():
 
     # Auto-save and draft management
     col_auto1, col_auto2, col_auto3 = st.columns([1, 1, 1])
-    
+
     with col_auto1:
         if st.button("💾 Save as Draft", key="save_draft_btn"):
             if student_name and student_class and selected_subjects:
@@ -2893,7 +3726,7 @@ def report_generator_tab():
                     'skill_clubs', 'skill_hobbies', 'skill_sports', 'teacher_comment',
                     'principal_comment', 'next_term'
                 ]
-                
+
                 for field in form_fields:
                     if field in st.session_state:
                         additional_data[field] = st.session_state[field]
@@ -2933,7 +3766,7 @@ def report_generator_tab():
         if student_name and student_class and selected_subjects:
             if 'last_auto_save' not in st.session_state:
                 st.session_state.last_auto_save = datetime.datetime.now()
-            
+
             # Check if 30 seconds have passed since last auto-save
             time_diff = datetime.datetime.now() - st.session_state.last_auto_save
             if time_diff.seconds >= 30:
@@ -2961,7 +3794,7 @@ def report_generator_tab():
                         'skill_clubs', 'skill_hobbies', 'skill_sports', 'teacher_comment',
                         'principal_comment', 'next_term'
                     ]
-                    
+
                     for field in form_fields:
                         if field in st.session_state:
                             additional_data[field] = st.session_state[field]
@@ -3052,7 +3885,10 @@ def report_generator_tab():
 
                 logo_base64 = get_logo_base64()
                 student_data = load_student_data(student_name, student_class) if student_name and student_class else None
-                html = render_html_report(student_name, student_class, term, report_df, total_term_score, average_cumulative, final_grade, logo_base64, student_data, report_details)
+
+                # Generate report ID once and use it consistently
+                report_id = generate_report_id()
+                html = render_html_report(student_name, student_class, term, report_df, total_term_score, average_cumulative, final_grade, logo_base64, student_data, report_details, report_id)
                 HTML(string=html).write_pdf("report_card.pdf")
 
             st.success("✅ Report Card Generated Successfully!")
@@ -3070,7 +3906,7 @@ def report_generator_tab():
                 )
 
             report_data = {
-                "report_id": generate_report_id(),
+                "report_id": report_id,
                 "student_name": student_name,
                 "student_class": student_class,
                 "term": term,
@@ -3086,7 +3922,8 @@ def report_generator_tab():
                 "report_details": report_details
             }
 
-            save_pending_report(report_data)
+            # Automatically approve the report
+            success, message = auto_approve_report(report_data)
 
             log_teacher_activity(st.session_state.teacher_id, "report_generated", {
                 "student_name": student_name,
@@ -3096,11 +3933,14 @@ def report_generator_tab():
                 "average_cumulative": float(average_cumulative),
                 "final_grade": final_grade,
                 "total_term_score": total_term_score,
-                "status": "pending_admin_review"
+                "status": "auto_approved"
             })
 
-            st.success("✅ Report Generated and Submitted for Admin Review!")
-            st.info("📋 The report has been sent to the administrator for review before being emailed to parents.")
+            if success:
+                st.success("✅ Report Generated and Automatically Approved!")
+                st.info("📋 The report has been automatically saved to the system.")
+            else:
+                st.error(f"❌ Error saving report: {message}")
 
         except Exception as e:
             st.error(f"❌ Error generating report: {str(e)}")
@@ -3350,6 +4190,49 @@ def verification_tab():
     st.subheader("🔍 Report Card Verification")
     st.markdown("Enter the Report ID to verify the authenticity of the report card")
 
+    # Show recent reports to help users find the correct ID (Admin only)
+    if check_user_permissions(st.session_state.teacher_id, "system_config"):
+        with st.expander("📋 Recent Report IDs (Admin Only)", expanded=False):
+            approved_dir = "approved_reports"
+            if os.path.exists(approved_dir):
+                recent_reports = []
+                for filename in os.listdir(approved_dir):
+                    if filename.endswith('.json'):
+                        filepath = os.path.join(approved_dir, filename)
+                        try:
+                            with open(filepath, 'r') as f:
+                                report = json.load(f)
+                                recent_reports.append({
+                                    'id': report.get('report_id', 'Unknown'),
+                                    'student': report.get('student_name', 'Unknown'),
+                                    'class': report.get('student_class', 'Unknown'),
+                                    'term': report.get('term', 'Unknown'),
+                                    'date': report.get('created_date', 'Unknown')
+                                })
+                        except:
+                            continue
+
+                # Sort by creation date (most recent first)
+                recent_reports.sort(key=lambda x: x['date'], reverse=True)
+
+                if recent_reports:
+                    st.markdown("**Recent Reports (Administrator View):**")
+                    for report in recent_reports[:10]:  # Show last 10 reports
+                        date_str = report['date']
+                        try:
+                            date_obj = datetime.datetime.fromisoformat(date_str)
+                            formatted_date = date_obj.strftime('%Y-%m-%d %H:%M')
+                        except:
+                            formatted_date = date_str
+
+                        st.markdown(f"**{report['id']}** - {report['student']} ({report['class']}) - {report['term']} - *{formatted_date}*")
+                else:
+                    st.info("No reports found in the system yet.")
+            else:
+                st.info("No reports directory found.")
+    else:
+        st.info("💡 Contact your administrator if you need help finding a specific Report ID.")
+
     report_id = st.text_input(
         "Enter Report ID:", 
         placeholder="e.g., ASS-123456-ABCD",
@@ -3365,18 +4248,33 @@ def verification_tab():
 
                 approved_dir = "approved_reports"
                 if os.path.exists(approved_dir):
+                    # First, let's list all available reports for debugging
+                    available_reports = []
                     for filename in os.listdir(approved_dir):
                         if filename.endswith('.json'):
                             filepath = os.path.join(approved_dir, filename)
                             try:
                                 with open(filepath, 'r') as f:
                                     report = json.load(f)
+                                    available_reports.append(report.get('report_id', 'Unknown'))
                                     if report.get('report_id') == report_id:
                                         report_found = True
                                         report_data = report
                                         break
-                            except:
+                            except Exception as e:
+                                st.error(f"Error reading report file {filename}: {str(e)}")
                                 continue
+
+                    # Debug information for admin users
+                    if check_user_permissions(st.session_state.get('teacher_id', ''), "system_config"):
+                        with st.expander("🔍 Debug Information (Admin Only)", expanded=False):
+                            st.write(f"**Searching for Report ID:** {report_id}")
+                            st.write(f"**Available Reports ({len(available_reports)}):**")
+                            for available_id in available_reports:
+                                if available_id == report_id:
+                                    st.success(f"✅ {available_id} (MATCH FOUND)")
+                                else:
+                                    st.write(f"• {available_id}")
 
                 if report_found and report_data:
                     st.success("✅ Report Verified Successfully!")
@@ -3477,15 +4375,20 @@ def verification_tab():
                         <span style="font-size: 48px; color: #f44336;">❌</span>
                         <br><strong style="color: #d32f2f; font-size: 20px;">REPORT NOT FOUND</strong>
                         <br><small style="color: #d32f2f; font-size: 14px;">Report ID: {report_id}</small>
-                        <br><small style="color: #f44336; font-size: 12px;">This report may not exist or has not been approved yet</small>
+                        <br><small style="color: #f44336; font-size: 12px;">This report may not exist or has not been generated yet</small>
                     </div>
                     """, unsafe_allow_html=True)
 
                     st.info("💡 **Possible reasons:**")
-                    st.write("• Report has not been approved by administration yet")
                     st.write("• Report ID was entered incorrectly")
-                    st.write("• Report may have been archived or moved")
+                    st.write("• Report has not been generated yet")
+                    st.write("• Report may have been deleted or archived")
                     st.write("• Contact the school for assistance")
+
+                    # Show available reports for reference (non-sensitive info only)
+                    if os.path.exists(approved_dir):
+                        report_count = len([f for f in os.listdir(approved_dir) if f.endswith('.json')])
+                        st.info(f"📊 **System Status:** {report_count} verified reports currently available in the system.")
             else:
                 st.error("❌ Invalid Report ID Format")
                 st.markdown(f"""
@@ -3499,202 +4402,7 @@ def verification_tab():
         else:
             st.warning("⚠️ Please enter a Report ID")
 
-def parent_portal_tab():
-    """Parent portal for viewing child's reports with photos and organized results"""
-    st.subheader("👨‍👩‍👧‍👦 Parent Portal")
 
-    if st.session_state.get('user_type') != 'parent':
-        st.error("❌ Access denied. Parent login required.")
-        return
-
-    child_data = st.session_state.get('child_data', {})
-    parent_email = st.session_state.get('parent_email', '')
-
-    st.markdown(f"### Welcome, Parent of {child_data.get('student_name', 'Student')}")
-
-    st.info("📚 This portal shows all academic reports for your child throughout their academic journey at Akin's Sunrise School, from admission to graduation.")
-
-    # Student photo section
-    with st.expander("📷 Student Photo", expanded=True):
-        photo_col1, photo_col2, photo_col3 = st.columns([1, 1, 1])
-
-        with photo_col2:  # Center the photo
-            photo_filename = child_data.get('photo_filename')
-            if photo_filename:
-                photo_path = os.path.join("student_database", photo_filename)
-                if os.path.exists(photo_path):
-                    try:
-                        st.image(photo_path, caption=f"{child_data.get('student_name', 'Student')} - {child_data.get('student_class', '')}", width=200)
-                    except:
-                        st.info("📷 Photo unavailable")
-                else:
-                    st.info("📷 Photo not found")
-            else:
-                st.info("📷 No photo available")
-
-    # Student information
-    with st.expander("📋 Student Information", expanded=True):
-        info_col1, info_col2 = st.columns(2)
-
-        with info_col1:
-            st.write(f"**Student Name:** {child_data.get('student_name', 'N/A')}")
-            st.write(f"**Class:** {child_data.get('student_class', 'N/A')}")
-            st.write(f"**Admission Number:** {child_data.get('admission_no', 'N/A')}")
-
-        with info_col2:
-            st.write(f"**Gender:** {child_data.get('gender', 'N/A')}")
-            st.write(f"**Attendance:** {child_data.get('attendance', 'N/A')}")
-            st.write(f"**Class Size:** {child_data.get('class_size', 'N/A')}")
-
-    # Academic reports organized by academic year and term
-    st.markdown("### 📊 Academic Progress History")
-
-    approved_dir = "approved_reports"
-    child_reports = []
-
-    if os.path.exists(approved_dir):
-        for filename in os.listdir(approved_dir):
-            if filename.endswith('.json'):
-                filepath = os.path.join(approved_dir, filename)
-                try:
-                    with open(filepath, 'r') as f:
-                        report = json.load(f)
-
-                        # Get student data from the report if available
-                        report_student_name = report.get('student_name', '')
-
-                        # Try to find admission number from student database for this student
-                        report_admission_no = None
-                        students = get_all_students()
-                        for student in students:
-                            if student.get('student_name') == report_student_name:
-                                report_admission_no = student.get('admission_no', '')
-                                break
-
-                        # Check by student name first, then by admission number for historical access
-                        name_match = report_student_name == child_data.get('student_name')
-                        admission_match = (report_admission_no and 
-                                         report_admission_no == child_data.get('admission_no'))
-
-                        # Include report if either name matches or admission number matches
-                        # This allows access to historical reports even if student was promoted/name changed
-                        if name_match or admission_match:
-                            # Store the matched admission number in report for reference
-                            if report_admission_no:
-                                report['matched_admission_no'] = report_admission_no
-                            child_reports.append(report)
-                except:
-                    continue
-
-    if child_reports:
-        # Group reports by academic year and term
-        reports_by_year = {}
-        for report in child_reports:
-            # Extract year from approved_date or use current year
-            try:
-                report_year = datetime.datetime.fromisoformat(report.get('approved_date', datetime.datetime.now().isoformat())).year
-            except:
-                report_year = datetime.datetime.now().year
-
-            if report_year not in reports_by_year:
-                reports_by_year[report_year] = {}
-
-            term = report.get('term', 'Unknown Term')
-            if term not in reports_by_year[report_year]:
-                reports_by_year[report_year][term] = []
-
-            reports_by_year[report_year][term].append(report)
-
-        # Display reports organized by year and term
-        for year in sorted(reports_by_year.keys(), reverse=True):
-            with st.expander(f"📅 Academic Year {year}/{year+1}", expanded=year == max(reports_by_year.keys())):
-                terms_order = ["1st Term", "2nd Term", "3rd Term"]
-
-                for term in terms_order:
-                    if term in reports_by_year[year]:
-                        st.markdown(f"#### 📚 {term}")
-
-                        for report in reports_by_year[year][term]:
-                            report_col1, report_col2, report_col3 = st.columns([2, 1, 1])
-
-                            with report_col1:
-                                st.write(f"**Class:** {report.get('student_class', 'N/A')}")
-                                st.write(f"**Average:** {report.get('average_cumulative', 0):.2f}%")
-                                st.write(f"**Grade:** {report.get('final_grade', 'N/A')}")
-                                if report.get('matched_admission_no'):
-                                    st.write(f"**Admission No:** {report.get('matched_admission_no')}")
-
-                            with report_col2:
-                                report_date = report.get('approved_date', 'N/A')
-                                if report_date != 'N/A':
-                                    try:
-                                        formatted_date = datetime.datetime.fromisoformat(report_date).strftime('%b %d, %Y')
-                                        st.write(f"**Date:** {formatted_date}")
-                                    except:
-                                        st.write(f"**Date:** {report_date}")
-                                else:
-                                    st.write(f"**Date:** {report_date}")
-                                st.write(f"**Teacher:** {report.get('teacher_id', 'N/A')}")
-
-                            with report_col3:
-                                # Download PDF if available
-                                pdf_path = f"approved_reports/approved_{report.get('report_id', '')}.pdf"
-                                if os.path.exists(pdf_path):
-                                    with open(pdf_path, "rb") as f:
-                                        st.download_button(
-                                            "📄 Download PDF",
-                                            f,
-                                            file_name=f"{child_data.get('student_name', 'Student')}_{term}_{year}.pdf",
-                                            mime="application/pdf",
-                                            key=f"download_{report.get('report_id', '')}"
-                                        )
-
-                        st.markdown("---")
-
-        # Academic performance summary
-        st.markdown("### 📈 Performance Summary")
-        if child_reports:
-            # Calculate overall statistics
-            all_averages = [r.get('average_cumulative', 0) for r in child_reports if r.get('average_cumulative')]
-            if all_averages:
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("📊 Overall Average", f"{np.mean(all_averages):.2f}%")
-                with col2:
-                    st.metric("📈 Highest Score", f"{max(all_averages):.2f}%")
-                with col3:
-                    st.metric("📉 Lowest Score", f"{min(all_averages):.2f}%")
-
-                # Performance trend chart
-                if len(all_averages) > 1:
-                    trend_data = []
-                    for i, report in enumerate(sorted(child_reports, key=lambda x: x.get('approved_date', ''))):
-                        trend_data.append({
-                            'Term': f"{report.get('term', 'Term')} ({datetime.datetime.fromisoformat(report.get('approved_date', datetime.datetime.now().isoformat())).year})",
-                            'Average': report.get('average_cumulative', 0),
-                            'Grade': report.get('final_grade', 'N/A')
-                        })
-
-                    trend_df = pd.DataFrame(trend_data)
-                    if not trend_df.empty:
-                        fig = px.line(trend_df, x='Term', y='Average', 
-                                    title='Academic Performance Trend',
-                                    markers=True,
-                                    hover_data=['Grade'])
-                        fig.update_layout(height=400)
-                        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.info("📭 No academic reports available yet.")
-
-    # Communication section
-    st.markdown("### 💬 Communication")
-    st.info("📧 For inquiries, please contact your child's class teacher or the school administration.")
-
-    # Contact information
-    with st.expander("📞 Contact Information", expanded=False):
-        st.write("**School Phone:** +234 800 123 4567")
-        st.write("**School Email:** info@akinssunrise.edu.ng")
-        st.write("**Address:** Sunrise Avenue Off Lujojomu Road, Upper Ayeyemi, Ondo City")
 
 def admin_panel_tab():
     st.subheader("⚙️ Admin Panel")
@@ -3705,13 +4413,14 @@ def admin_panel_tab():
         st.info("Contact your system administrator for admin privileges.")
         return
 
-    admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5, admin_tab6, admin_tab7 = st.tabs([
-        "📋 Pending Reports", 
+    admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5, admin_tab6, admin_tab7, admin_tab8 = st.tabs([
+        "📊 System Overview", 
         "👥 User Management",
         "🔒 Security & 2FA",
         "💾 Backup & Restore",
         "📊 System Stats", 
         "📧 Email Setup", 
+        "📞 Support Config",
         "🔍 Audit Logs"
     ])
 
@@ -3759,7 +4468,8 @@ def admin_panel_tab():
                                 "failed_attempts": 0,
                                 "locked_until": None,
                                 "assigned_classes": new_assigned_classes,
-                                "departments": new_departments or ["all"]
+                                "departments": new_departments or ["all"],
+                                "custom_features": USER_ROLES[new_role].get('default_features', [])
                             }
 
                             if save_user_database(users_db):
@@ -3795,6 +4505,10 @@ def admin_panel_tab():
                         st.write(f"**Status:** {'🟢 Active' if user.get('active', True) else '🔴 Disabled'}")
                         st.write(f"**2FA:** {'✅ Enabled' if user.get('two_factor_enabled', False) else '❌ Disabled'}")
                         st.write(f"**Classes:** {', '.join(user.get('assigned_classes', []))}")
+
+                        # Show user's current features
+                        user_features = user.get('custom_features', USER_ROLES.get(user.get('role', 'teacher'), {}).get('default_features', []))
+                        st.write(f"**Features:** {len(user_features)} enabled")
 
                     with col2:
                         # Toggle active status
@@ -3834,6 +4548,11 @@ def admin_panel_tab():
                             st.session_state[f"show_edit_{user_id}"] = True
                             st.rerun()
 
+                        # Manage features
+                        if st.button("🔧 Features", key=f"features_btn_{user_id}"):
+                            st.session_state[f"show_features_{user_id}"] = True
+                            st.rerun()
+
                         # Delete user (only if not current user)
                         if user_id != st.session_state.teacher_id:
                             if st.button("🗑️ Delete", key=f"delete_btn_{user_id}"):
@@ -3871,16 +4590,16 @@ def admin_panel_tab():
                     if st.session_state.get(f"show_edit_{user_id}", False):
                         st.markdown("---")
                         st.markdown(f"**Edit User: {user.get('full_name', user_id)}**")
-                        
+
                         with st.form(f"edit_user_form_{user_id}"):
                             edit_col1, edit_col2 = st.columns(2)
-                            
+
                             with edit_col1:
                                 edit_full_name = st.text_input("Full Name", value=user.get('full_name', ''))
                                 edit_email = st.text_input("Email", value=user.get('email', ''))
                                 edit_role = st.selectbox("Role", list(USER_ROLES.keys()), 
                                                        index=list(USER_ROLES.keys()).index(user.get('role', 'teacher')))
-                                
+
                             with edit_col2:
                                 edit_phone = st.text_input("Phone", value=user.get('phone', ''))
                                 edit_session_timeout = st.number_input("Session Timeout (minutes)", 
@@ -3889,12 +4608,12 @@ def admin_panel_tab():
                                 edit_departments = st.multiselect("Departments", 
                                                                 ["all", "sciences", "mathematics", "languages", "arts", "social_studies"],
                                                                 default=user.get('departments', []))
-                            
+
                             edit_assigned_classes = st.multiselect("Assigned Classes", 
                                 ["SS1A", "SS1B", "SS1C", "SS2A", "SS2B", "SS2C", "SS3A", "SS3B", "SS3C", 
                                  "JSS1A", "JSS1B", "JSS1C", "JSS2A", "JSS2B", "JSS2C", "JSS3A", "JSS3B", "JSS3C"],
                                 default=user.get('assigned_classes', []))
-                            
+
                             form_col1, form_col2 = st.columns(2)
                             with form_col1:
                                 if st.form_submit_button("💾 Save Changes"):
@@ -3908,7 +4627,7 @@ def admin_panel_tab():
                                             'departments': edit_departments or ["all"],
                                             'assigned_classes': edit_assigned_classes
                                         })
-                                        
+
                                         if save_user_database(users_db):
                                             st.success("✅ User updated successfully!")
                                             log_teacher_activity(st.session_state.teacher_id, "user_updated", {
@@ -3921,11 +4640,84 @@ def admin_panel_tab():
                                             st.error("❌ Error updating user")
                                     else:
                                         st.error("❌ Please fill in required fields")
-                            
+
                             with form_col2:
                                 if st.form_submit_button("❌ Cancel"):
                                     st.session_state[f"show_edit_{user_id}"] = False
                                     st.rerun()
+
+                    # Feature management form
+                    if st.session_state.get(f"show_features_{user_id}", False):
+                        st.markdown("---")
+                        st.markdown(f"**Manage Features for: {user.get('full_name', user_id)}**")
+
+                        current_features = user.get('custom_features', USER_ROLES.get(user.get('role', 'teacher'), {}).get('default_features', []))
+
+                        with st.form(f"features_form_{user_id}"):
+                            st.markdown("#### System Features Access")
+                            st.info(f"User Role: {user.get('role', 'teacher')} - {USER_ROLES.get(user.get('role', 'teacher'), {}).get('description', 'Unknown role')}")
+
+                            selected_features = []
+
+                            # Show all available features with checkboxes
+                            for feature_key, feature_info in SYSTEM_FEATURES.items():
+                                # Check if user has required permission for this feature
+                                required_permission = feature_info.get('required_permission')
+                                can_access = True
+
+                                if required_permission and not check_user_permissions(user_id, required_permission):
+                                    can_access = False
+
+                                if can_access:
+                                    is_enabled = feature_key in current_features
+                                    if st.checkbox(
+                                        f"{feature_info['name']} - {feature_info['description']}", 
+                                        value=is_enabled,
+                                        key=f"feature_{user_id}_{feature_key}"
+                                    ):
+                                        selected_features.append(feature_key)
+                                else:
+                                    st.markdown(f"🔒 {feature_info['name']} - *Requires {required_permission} permission*")
+
+                            feature_col1, feature_col2 = st.columns(2)
+                            with feature_col1:
+                                if st.form_submit_button("💾 Save Feature Access"):
+                                    users_db[user_id]['custom_features'] = selected_features
+                                    if save_user_database(users_db):
+                                        st.success("✅ Feature access updated successfully!")
+                                        log_teacher_activity(st.session_state.teacher_id, "user_features_updated", {
+                                            "updated_user": user_id,
+                                            "features": selected_features,
+                                            "updated_by": st.session_state.teacher_id
+                                        })
+                                        st.session_state[f"show_features_{user_id}"] = False
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Error updating features")
+
+                            with feature_col2:
+                                if st.form_submit_button("❌ Cancel"):
+                                    st.session_state[f"show_features_{user_id}"] = False
+                                    st.rerun()
+
+                        # Show current vs default features comparison
+                        st.markdown("#### Feature Comparison")
+                        default_features = USER_ROLES.get(user.get('role', 'teacher'), {}).get('default_features', [])
+
+                        comparison_col1, comparison_col2 = st.columns(2)
+                        with comparison_col1:
+                            st.markdown("**Default Features for Role:**")
+                            for feature in default_features:
+                                if feature in SYSTEM_FEATURES:
+                                    st.markdown(f"• {SYSTEM_FEATURES[feature]['name']}")
+
+                        with comparison_col2:
+                            st.markdown("**Current Custom Features:**")
+                            for feature in current_features:
+                                if feature in SYSTEM_FEATURES:
+                                    st.markdown(f"• {SYSTEM_FEATURES[feature]['name']}")
+                            if not current_features:
+                                st.markdown("*Using default role features*")
 
                     # Delete confirmation
                     if st.session_state.get(f"show_delete_{user_id}", False):
@@ -4348,67 +5140,18 @@ def admin_panel_tab():
                 st.success("✅ Backup settings saved!")
 
     with admin_tab1:
-        st.markdown("### 📋 Pending Reports Review")
+        st.markdown("### 📊 Approved Reports Overview")
 
-        pending_reports = get_pending_reports()
+        # Show approved reports statistics
+        approved_count = 0
+        if os.path.exists("approved_reports"):
+            approved_count = len([f for f in os.listdir("approved_reports") if f.endswith('.json')])
 
-        if pending_reports:
-            st.write(f"**{len(pending_reports)} reports awaiting your review:**")
+        st.metric("✅ Total Approved Reports", approved_count)
 
-            for report in pending_reports:
-                with st.expander(f"📄 {report['student_name']} ({report['student_class']}) - {report['term']}", expanded=False):
-                    col1, col2 = st.columns([2, 1])
-
-                    with col1:
-                        st.write(f"**Student:** {report['student_name']}")
-                        st.write(f"**Class:** {report['student_class']}")
-                        st.write(f"**Term:** {report['term']}")
-                        st.write(f"**Teacher:** {report['teacher_id']}")
-                        st.write(f"**Parent Email:** {report.get('parent_email', 'Not provided')}")
-                        st.write(f"**Submitted:** {datetime.datetime.fromisoformat(report['created_date']).strftime('%Y-%m-%d %H:%M')}")
-                        st.write(f"**Average:** {report['average_cumulative']:.2f}% (Grade {report['final_grade']})")
-
-                    with col2:
-                        pdf_path = f"pending_reports/pending_{report['report_id']}.pdf"
-                        if os.path.exists(pdf_path):
-                            with open(pdf_path, "rb") as f:
-                                st.download_button(
-                                    "📄 Download PDF",
-                                    f,
-                                    file_name=f"{report['student_name']}_preview.pdf",
-                                    mime="application/pdf",
-                                    key=f"download_{report['report_id']}"
-                                )
-
-                    st.markdown("---")
-                    action_col1, action_col2, action_col3 = st.columns([1, 1, 2])
-
-                    with action_col1:
-                        if st.button("✅ Approve", key=f"approve_{report['report_id']}"):
-                            success, message = approve_report(report['report_id'])
-                            if success:
-                                st.success(message)
-                                st.rerun()
-                            else:
-                                st.error(message)
-
-                    with action_col2:
-                        if st.button("❌ Reject", key=f"reject_{report['report_id']}"):
-                            st.session_state[f"show_reject_{report['report_id']}"] = True
-
-                    if st.session_state.get(f"show_reject_{report['report_id']}", False):
-                        with action_col3:
-                            reason = st.text_area("Rejection Reason:", key=f"reason_{report['report_id']}", height=68)
-                            if st.button("Confirm Rejection", key=f"confirm_reject_{report['report_id']}"):
-                                success, message = reject_report(report['report_id'], reason)
-                                if success:
-                                    st.success(message)
-                                    st.session_state[f"show_reject_{report['report_id']}"] = False
-                                    st.rerun()
-                                else:
-                                    st.error(message)
-        else:
-            st.info("🎉 No pending reports! All reports have been reviewed.")
+        if approved_count > 0:
+            st.success("🎉 All reports are automatically approved and saved to the system!")
+            st.info("📋 Reports are now processed instantly without requiring manual review.")
 
     with admin_tab2:
         st.markdown("### 📊 System Statistics")
@@ -4701,13 +5444,116 @@ def admin_panel_tab():
                     st.error("❌ Please fill in all required fields")
 
     with admin_tab7:
+        st.markdown("### 📞 Contact Support Configuration")
+        st.markdown("Configure contact support information that appears on the activation page.")
+
+        # Load existing support config
+        support_config = {}
+        if os.path.exists("support_config.json"):
+            try:
+                with open("support_config.json", 'r') as f:
+                    support_config = json.load(f)
+            except:
+                support_config = {}
+
+        with st.form("support_config_form"):
+            st.markdown("#### Contact Support Information")
+            col1, col2 = st.columns(2)
+
+            with col1:
+                support_contact = st.text_input("Support Contact Name", 
+                                               value=support_config.get('contact_name', 'teacher_bamstep'),
+                                               help="Name of the person handling support requests")
+                support_email = st.text_input("Support Email", 
+                                            value=support_config.get('email', 'bamstep@akinssunrise.edu.ng'),
+                                            help="Email address for support requests")
+
+            with col2:
+                support_phone = st.text_input("Support Phone", 
+                                            value=support_config.get('phone', '+234 800 123 4567'),
+                                            help="Phone number for support calls")
+                support_hours = st.text_input("Support Hours", 
+                                            value=support_config.get('hours', 'Monday - Friday, 9:00 AM - 5:00 PM'),
+                                            help="Available support hours")
+
+            support_message = st.text_area("Support Message", 
+                                         value=support_config.get('message', 'Please have your payment receipt ready when contacting support.'),
+                                         help="Additional message for users needing support",
+                                         height=100)
+
+            additional_instructions = st.text_area("Additional Instructions", 
+                                                 value=support_config.get('instructions', 'For activation issues, please provide your school name and payment confirmation.'),
+                                                 help="Additional instructions for users",
+                                                 height=100)
+
+            if st.form_submit_button("💾 Save Support Configuration"):
+                new_support_config = {
+                    'contact_name': support_contact,
+                    'email': support_email,
+                    'phone': support_phone,
+                    'hours': support_hours,
+                    'message': support_message,
+                    'instructions': additional_instructions,
+                    'updated_by': st.session_state.teacher_id,
+                    'updated_date': datetime.datetime.now().isoformat()
+                }
+
+                try:
+                    with open("support_config.json", 'w') as f:
+                        json.dump(new_support_config, f, indent=2)
+
+                    st.success("✅ Support configuration updated successfully!")
+
+                    # Log the activity
+                    log_teacher_activity(st.session_state.teacher_id, "support_config_updated", {
+                        "updated_by": st.session_state.teacher_id,
+                        "contact_name": support_contact,
+                        "email": support_email
+                    })
+
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Error saving support configuration: {str(e)}")
+
+        # Preview section
+        st.markdown("---")
+        st.markdown("### 👀 Preview")
+        st.markdown("This is how the support information will appear on the activation page:")
+
+        # Show preview of how it will look
+        current_config = support_config if support_config else {
+            'contact_name': 'teacher_bamstep',
+            'email': 'bamstep@akinssunrise.edu.ng',
+            'phone': '+234 800 123 4567',
+            'hours': 'Monday - Friday, 9:00 AM - 5:00 PM',
+            'message': 'Please have your payment receipt ready when contacting support.',
+            'instructions': 'For activation issues, please provide your school name and payment confirmation.'
+        }
+
+        st.info(f"""
+**Need help with activation?**
+
+📞 **Contact:** {current_config.get('contact_name', 'teacher_bamstep')}
+📧 **Email:** {current_config.get('email', 'bamstep@akinssunrise.edu.ng')}
+📱 **Phone:** {current_config.get('phone', '+234 800 123 4567')}
+🕐 **Hours:** {current_config.get('hours', 'Monday - Friday, 9:00 AM - 5:00 PM')}
+
+**Support Message:**
+{current_config.get('message', 'Please have your payment receipt ready when contacting support.')}
+
+**Instructions:**
+{current_config.get('instructions', 'For activation issues, please provide your school name and payment confirmation.')}
+        """)
+
+    with admin_tab8:
         st.markdown("### ⚙️ System Configuration & Customization")
 
-        config_tab1, config_tab2, config_tab3, config_tab4, config_tab5 = st.tabs([
+        config_tab1, config_tab2, config_tab3, config_tab4, config_tab5, config_tab6 = st.tabs([
             "🏫 School Information",
             "📧 Email Templates", 
             "🎨 Appearance & Branding",
             "📋 Form Settings",
+            "💳 Activation Settings",
             "🔍 Audit Logs"
         ])
 
@@ -5047,6 +5893,199 @@ def admin_panel_tab():
                         st.rerun()
 
         with config_tab5:
+            st.markdown("### 💳 System Activation & Payment Configuration")
+
+            # Only teacher_bamstep can access this section
+            if st.session_state.teacher_id == "teacher_bamstep":
+                activation_config = load_activation_config()
+
+                st.markdown("#### 💰 Payment Plan Configuration")
+
+                with st.form("activation_config_form"):
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        st.markdown("**Subscription Pricing (NGN)**")
+                        monthly_amount = st.number_input("Monthly Amount", 
+                                                       min_value=1000, max_value=100000, 
+                                                       value=activation_config.get('monthly_amount', 20000),
+                                                       step=1000)
+                        yearly_amount = st.number_input("Yearly Amount", 
+                                                      min_value=10000, max_value=1000000, 
+                                                      value=activation_config.get('yearly_amount', 60000),
+                                                      step=5000)
+
+                        currency = st.selectbox("Currency", ["NGN", "USD", "EUR", "GBP"], 
+                                               index=0 if activation_config.get('currency', 'NGN') == 'NGN' else 0)
+
+                    with col2:
+                        st.markdown("**System Settings**")
+                        activation_enabled = st.checkbox("Enable Activation System", 
+                                                       value=activation_config.get('activation_enabled', True))
+                        trial_period = st.number_input("Trial Period (days)", 
+                                                     min_value=0, max_value=90, 
+                                                     value=activation_config.get('trial_period_days', 30))
+                        grace_period = st.number_input("Grace Period (days)", 
+                                                     min_value=0, max_value=30, 
+                                                     value=activation_config.get('grace_period_days', 7))
+
+                    st.markdown("**Bank Details for Payment**")
+                    bank_details = activation_config.get('bank_details', {})
+
+                    bank_col1, bank_col2 = st.columns(2)
+                    with bank_col1:
+                        bank_name = st.text_input("Bank Name", 
+                                                value=bank_details.get('bank_name', 'First Bank Nigeria'))
+                        account_name = st.text_input("Account Name", 
+                                                   value=bank_details.get('account_name', 'Bamstep Technologies'))
+
+                    with bank_col2:
+                        account_number = st.text_input("Account Number", 
+                                                     value=bank_details.get('account_number', '1234567890'))
+                        sort_code = st.text_input("Sort Code", 
+                                                value=bank_details.get('sort_code', '011'))
+
+                    if st.form_submit_button("💾 Save Activation Configuration"):
+                        new_config = {
+                            'monthly_amount': monthly_amount,
+                            'yearly_amount': yearly_amount,
+                            'currency': currency,
+                            'activation_enabled': activation_enabled,
+                            'trial_period_days': trial_period,
+                            'grace_period_days': grace_period,
+                            'bank_details': {
+                                'bank_name': bank_name,
+                                'account_name': account_name,
+                                'account_number': account_number,
+                                'sort_code': sort_code
+                            },
+                            'updated_by': st.session_state.teacher_id,
+                            'updated_date': datetime.datetime.now().isoformat()
+                        }
+
+                        if save_activation_config(new_config):
+                            st.success("✅ Activation configuration updated successfully!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Error saving activation configuration")
+
+                # Pricing preview
+                st.markdown("#### 💰 Pricing Preview")
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown(f"""
+                    <div style="border: 2px solid #007bff; border-radius: 8px; padding: 1rem; text-align: center;">
+                        <h4 style="color: #007bff;">Monthly</h4>
+                        <h2>{currency} {activation_config.get('monthly_amount', 20000):,}</h2>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                with col2:
+                    monthly_yearly_total = activation_config.get('monthly_amount', 20000) * 12
+                    yearly_price = activation_config.get('yearly_amount', 60000)
+                    yearly_savings = monthly_yearly_total - yearly_price
+
+                    st.markdown(f"""
+                    <div style="border: 2px solid #ffc107; border-radius: 8px; padding: 1rem; text-align: center;">
+                        <h4 style="color: #f57c00;">Yearly</h4>
+                        <h2>{currency} {yearly_price:,}</h2>
+                        <small style="color: #f57c00;">Save {currency} {yearly_savings:,}</small>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                # Current system status
+                st.markdown("#### 📊 Current System Status")
+                is_activated, status, expiry = check_activation_status()
+
+                if is_activated:
+                    if status.get('status') == 'trial':
+                        st.info("🆓 System is in trial period")
+                    else:
+                        st.success("✅ System is activated")
+                        if expiry:
+                            days_left = (expiry - datetime.datetime.now()).days
+                            st.write(f"**Expires in:** {days_left} days")
+                else:
+                    st.warning("⚠️ System requires activation")
+
+                # Activation records
+                st.markdown("#### 📋 Recent Activations")
+                if os.path.exists("activation_records.json"):
+                    try:
+                        with open("activation_records.json", 'r') as f:
+                            records = json.load(f)
+
+                        if records:
+                            recent_records = sorted(records, key=lambda x: x.get('generated_date', ''), reverse=True)[:5]
+
+                            for record in recent_records:
+                                col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                                with col1:
+                                    st.write(f"**{record.get('school_name', 'Unknown')}**")
+                                with col2:
+                                    st.write(f"{record.get('subscription_type', 'monthly').title()}")
+                                with col3:
+                                    st.write(f"{currency} {record.get('amount', 0):,}")
+                                with col4:
+                                    date_str = record.get('generated_date', '')
+                                    if date_str:
+                                        try:
+                                            date_obj = datetime.datetime.fromisoformat(date_str)
+                                            st.write(date_obj.strftime('%Y-%m-%d'))
+                                        except:
+                                            st.write(date_str[:10])
+                        else:
+                            st.info("No activation records found.")
+                    except:
+                        st.error("Error loading activation records.")
+                else:
+                    st.info("No activation records file found.")
+
+                # Override system activation (emergency use)
+                st.markdown("#### 🚨 Emergency Controls")
+                with st.expander("⚠️ Emergency System Override", expanded=False):
+                    st.error("**WARNING:** These controls should only be used in emergencies!")
+                    st.warning("🚨 **IMPORTANT**: Disabling activation will immediately kick out ALL users (including you) and require a new activation key to be generated and activated.")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🔓 Disable Activation Requirement"):
+                            activation_config['activation_enabled'] = False
+                            save_activation_config(activation_config)
+                            # Also remove current activation status to force complete reactivation
+                            if os.path.exists("activation_status.json"):
+                                os.remove("activation_status.json")
+                            st.success("✅ Activation requirement disabled! All users will be logged out.")
+                            st.info("🔄 You will be redirected to the activation page.")
+                            # Clear current session to force logout
+                            st.session_state.authenticated = False
+                            st.session_state.teacher_id = None
+                            st.rerun()
+
+                    with col2:
+                        if st.button("🔒 Enable Activation Requirement"):
+                            activation_config['activation_enabled'] = True
+                            save_activation_config(activation_config)
+                            st.success("✅ Activation requirement enabled!")
+                            st.rerun()
+
+                    # Manual activation override
+                    st.markdown("**Manual System Activation:**")
+                    override_subscription = st.selectbox("Override Subscription Type", 
+                                                       ["monthly", "yearly"], 
+                                                       key="override_sub")
+                    if st.button("🔑 Manually Activate System"):
+                        if activate_system("MANUAL-OVERRIDE-KEY", override_subscription):
+                            st.success("✅ System manually activated!")
+                            st.rerun()
+                        else:
+                            st.error("❌ Error activating system")
+            else:
+                st.warning("⚠️ Access restricted to teacher_bamstep only.")
+                st.info("Only the system developer can configure activation and payment settings.")
+
+        with config_tab6:
             st.markdown("### 🔍 Advanced Audit Logs")
 
             # Recent activity
@@ -5511,13 +6550,23 @@ def analytics_dashboard_tab():
 
 def report_generator_page():
     st.set_page_config(
-        page_title="Akin's Sunrise School - Management System", 
+        page_title="Akin's Sunrise School – Report Card System", 
         layout="wide",
         initial_sidebar_state="collapsed",
         page_icon="🎓"
     )
 
     apply_custom_css()
+
+    # Check activation status for all authenticated users (including teacher_bamstep)
+    is_activated, activation_status, expiry_date = check_activation_status()
+    if not is_activated:
+        st.error("🚨 System activation has expired or been disabled. Please reactivate the system.")
+        st.info("🔄 Redirecting to activation page...")
+        # Clear authentication and redirect to login/activation page
+        st.session_state.authenticated = False
+        st.session_state.teacher_id = None
+        st.rerun()
 
     # Check session timeout
     if check_session_timeout():
@@ -5529,113 +6578,83 @@ def report_generator_page():
     # Update activity
     update_session_activity()
 
+    # Responsive header layout with logo
+    logo_base64 = get_logo_base64()
+    logo_html = ""
+    if logo_base64:
+        logo_html = f'<img src="data:image/png;base64,{logo_base64}" style="width: 60px; height: 60px; object-fit: contain; border-radius: 8px; margin-right: 1rem; vertical-align: middle;">'
+
+    st.markdown(f"""
+    <div style="text-align: center; padding: 1.5rem 1rem; background: linear-gradient(135deg, rgba(25, 118, 210, 0.08), rgba(33, 150, 243, 0.08)); border-radius: 16px; margin-bottom: 2rem; backdrop-filter: blur(15px); border: 2px solid rgba(25, 118, 210, 0.15); box-shadow: 0 8px 32px rgba(25, 118, 210, 0.1);">
+        <div style="display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;">
+            {logo_html}
+            <div>
+                <h1 style="margin: 0; color: #1976D2; font-size: clamp(1.8rem, 4vw, 3rem); font-weight: 800; text-shadow: 0 2px 4px rgba(25, 118, 210, 0.1);">
+                    🎓 Akin's Sunrise School System
+                </h1>
+                <p style="margin: 0.5rem 0 0; color: #555; font-size: clamp(1rem, 2.5vw, 1.2rem); font-weight: 600; opacity: 0.9;">
+                    Comprehensive Management Portal
+                </p>
+            </div>
+        </div>
+        <div style="height: 3px; background: linear-gradient(90deg, transparent, #1976D2, #42A5F5, #1976D2, transparent); border-radius: 2px; margin-top: 1rem;"></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # User info and logout in a compact layout
     col1, col2, col3 = st.columns([1, 2, 1])
 
-    with col1:
-        logo_base64 = get_logo_base64()
-        if logo_base64:
-            st.markdown(f"""
-            <div style="text-align: center;">
-                <img src="data:image/png;base64,{logo_base64}" style="width: 150px; height: 150px; object-fit: contain; border-radius: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);">
-            </div>
-            """, unsafe_allow_html=True)
-
     with col2:
-        st.markdown("""
-        <div style="text-align: center;">
-            <h1 style="margin: 0; color: var(--accent-color);">🎓 Akin's Sunrise School System</h1>
-            <p style="margin: 5px 0; color: var(--text-secondary); font-weight: bold;">Comprehensive Management Portal</p>
+        # Display user info centered
+        users_db = load_user_database()
+        user_info = users_db.get(st.session_state.teacher_id, {})
+        role_description = USER_ROLES.get(user_info.get('role', 'teacher'), {}).get('description', 'User')
+
+        # Combined user info and logout
+        st.markdown(f"""
+        <div style="text-align: center; background: rgba(25, 118, 210, 0.05); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; border: 1px solid rgba(25, 118, 210, 0.1);">
+            <div style="color: #1976D2; font-weight: 600; margin-bottom: 0.5rem;">
+                <strong>{role_description}:</strong> {user_info.get('full_name', st.session_state.teacher_id)}
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
-        # Display user info based on type
-        if st.session_state.get('user_type') == 'parent':
-            st.markdown(f"<div style='text-align: center; color: var(--text-secondary);'><strong>Parent Portal:</strong> {st.session_state.get('parent_email', 'Parent')}</div>", unsafe_allow_html=True)
-        else:
-            users_db = load_user_database()
-            user_info = users_db.get(st.session_state.teacher_id, {})
-            role_description = USER_ROLES.get(user_info.get('role', 'teacher'), {}).get('description', 'User')
-            st.markdown(f"<div style='text-align: center; color: var(--text-secondary);'><strong>{role_description}:</strong> {user_info.get('full_name', st.session_state.teacher_id)}</div>", unsafe_allow_html=True)
-
-    with col3:
+        # Logout button
         if st.button("🚪 Logout", use_container_width=True):
-            if st.session_state.get('user_type') == 'parent':
-                log_teacher_activity(st.session_state.get('parent_email', 'parent'), "logout", {
-                    "logout_time": datetime.datetime.now().isoformat(),
-                    "user_type": "parent"
-                })
-            else:
-                log_teacher_activity(st.session_state.teacher_id, "logout", {
-                    "logout_time": datetime.datetime.now().isoformat()
-                })
+            log_teacher_activity(st.session_state.teacher_id, "logout", {
+                "logout_time": datetime.datetime.now().isoformat()
+            })
 
             # Clear all session state
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
 
-    # Different interfaces based on user type
-    if st.session_state.get('user_type') == 'parent':
-        # Parent portal interface
-        tab1, tab2 = st.tabs([
-            "📊 Child's Reports", 
-            "📞 Contact Information"
-        ])
-
-        with tab1:
-            parent_portal_tab()
-
-        with tab2:
-            st.markdown("### 📞 School Contact Information")
-
-            # Load school configuration
-            school_config = load_school_config()
-
-            school_name = school_config.get('school_name', "Akin's Sunrise Secondary School")
-            school_address = school_config.get('school_address', "Sunrise Avenue Off Lujojomu Road\nUpper Ayeyemi, Ondo City\nOndo State")
-            school_phone = school_config.get('school_phone', "+234 800 123 4567")
-            school_email = school_config.get('school_email', "info@akinssunrise.edu.ng")
-            office_hours = school_config.get('office_hours', "Monday - Friday, 8:00 AM - 4:00 PM")
-            school_website = school_config.get('school_website', "www.akinssunrise.edu.ng")
-
-            st.markdown(f"""
-            **{school_name}**
-
-            📍 **Address:** {school_address.replace(chr(10), ', ')}
-
-            📞 **Phone:** {school_phone}
-
-            📧 **Email:** {school_email}
-
-            🌐 **Website:** {school_website}
-
-            🕐 **Office Hours:** {office_hours}
-            """)
-    else:
-        # Staff interface with role-based access
+    # Staff interface with feature-based access control
         available_tabs = []
 
-        # Generate Reports - available to all staff
-        if check_user_permissions(st.session_state.teacher_id, "report_generation"):
+        # Generate Reports
+        if check_user_feature_access(st.session_state.teacher_id, "report_generation"):
             available_tabs.append(("📝 Generate Reports", "reports"))
 
-        # Draft Reports - available to all staff who can generate reports
-        if check_user_permissions(st.session_state.teacher_id, "report_generation"):
+        # Draft Reports
+        if check_user_feature_access(st.session_state.teacher_id, "draft_management"):
             available_tabs.append(("📝 Draft Reports", "drafts"))
 
-        # Student Database - class teachers and above
-        if check_user_permissions(st.session_state.teacher_id, "student_management"):
+        # Student Database
+        if check_user_feature_access(st.session_state.teacher_id, "student_database"):
             available_tabs.append(("👥 Student Database", "database"))
 
-        # Analytics - department heads and above
-        if check_user_permissions(st.session_state.teacher_id, "department_reports"):
+        # Analytics
+        if check_user_feature_access(st.session_state.teacher_id, "analytics_dashboard"):
             available_tabs.append(("📊 Analytics", "analytics"))
 
-        # Verification - available to all
-        available_tabs.append(("🔍 Verify Reports", "verify"))
+        # Verification
+        if check_user_feature_access(st.session_state.teacher_id, "verification_system"):
+            available_tabs.append(("🔍 Verify Reports", "verify"))
 
-        # Admin Panel - principals and system admins only
-        if check_user_permissions(st.session_state.teacher_id, "system_config"):
+        # Admin Panel
+        if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
             available_tabs.append(("⚙️ Admin Panel", "admin"))
 
         # Create tabs
