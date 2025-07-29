@@ -1193,13 +1193,13 @@ def auto_approve_report(report_data):
         report_data['status'] = 'approved'
         report_data['approved_date'] = datetime.datetime.now().isoformat()
         report_data['approved_by'] = 'auto_system'
-        
+
         # Add persistence markers
         report_data['persistent'] = True
         report_data['backup_created'] = datetime.datetime.now().isoformat()
 
         approved_path = os.path.join(approved_dir, f"approved_{report_data['report_id']}.json")
-        
+
         # Enhanced data persistence with multiple write attempts
         for attempt in range(3):
             try:
@@ -1207,7 +1207,7 @@ def auto_approve_report(report_data):
                     json.dump(report_data, f, indent=2)
                     f.flush()
                     os.fsync(f.fileno())
-                
+
                 # Verify file was written correctly
                 with open(approved_path, 'r') as f:
                     test_data = json.load(f)
@@ -1634,7 +1634,12 @@ def check_activation_status():
         config = load_activation_config()
 
         # If activation is disabled in config, system is not activated regardless of other factors
+        # EXCEPT for the developer account (teacher_bamstep) who can always access
         if not config.get('activation_enabled', True):
+            # Allow developer to bypass activation requirement
+            current_user = st.session_state.get('teacher_id')
+            if current_user == 'teacher_bamstep':
+                return True, {"status": "developer_bypass", "user": "teacher_bamstep"}, None
             return False, {"status": "activation_disabled"}, None
 
         if os.path.exists("activation_status.json"):
@@ -1691,7 +1696,7 @@ def is_activation_key_deactivated(activation_key):
         if os.path.exists("activation_records.json"):
             with open("activation_records.json", 'r') as f:
                 records = json.load(f)
-                
+
             for record in records:
                 if record.get('activation_key') == activation_key:
                     return record.get('status', 'generated') == 'deactivated'
@@ -1785,7 +1790,7 @@ def activate_system(activation_key, subscription_type="monthly"):
                     json.dump(activation_data, f, indent=2)
                     f.flush()
                     os.fsync(f.fileno())
-                
+
                 # Verify the file was written correctly
                 with open("activation_status.json", 'r') as f:
                     test_data = json.load(f)
@@ -2641,8 +2646,18 @@ def show_activation_required_page():
         """, unsafe_allow_html=True)
 
     st.markdown("""
+    <style>
+    @keyframes pulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.05); }
+        100% { transform: scale(1); }
+    }
+    .animated-header {
+        animation: pulse 2s ease-in-out infinite;
+    }
+    </style>
     <div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="color: #ff6b6b; margin: 10px 0;">🔒 System Activation Required</h1>
+        <h1 class="animated-header" style="color: #ff6b6b; margin: 10px 0;">🔒 System Activation Required</h1>
         <h2 style="color: var(--text-secondary); margin: 5px 0;">Akin's Sunrise School System</h2>
     </div>
     """, unsafe_allow_html=True)
@@ -2654,7 +2669,6 @@ def show_activation_required_page():
     if activation_status.get('status') == 'activation_disabled':
         st.error("🚨 **SYSTEM DEACTIVATED**")
         st.warning("⚠️ The system activation has been disabled. A new activation key must be generated and activated to continue using the system.")
-        st.info("🔄 This applies to all users including administrators.")
     elif activation_status.get('status') == 'key_deactivated':
         deactivated_key = activation_status.get('activation_key', 'Unknown')
         st.error("🚨 **ACTIVATION KEY DEACTIVATED**")
@@ -2732,9 +2746,6 @@ def show_activation_required_page():
 
     st.error("🚨 This system requires activation to continue.")
 
-    st.markdown("### 🏦 Payment Instructions")
-    st.code(get_payment_instructions())
-
     # Activation key input (only for teacher_bamstep)
     st.markdown("### 🔑 System Activation")
 
@@ -2796,9 +2807,13 @@ def show_activation_required_page():
             with st.expander("📋 Activation Key Management", expanded=False):
                 try:
                     with open("activation_records.json", 'r') as f:
-                        records = json.load(f)
+                        content = f.read().strip()
+                        if not content:
+                            records = []
+                        else:
+                            records = json.loads(content)
 
-                    if records:
+                    if records and isinstance(records, list):
                         st.markdown("#### Active Activation Keys")
                         for i, record in enumerate(records[-15:]):  # Show last 15
                             col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
@@ -2850,7 +2865,7 @@ def show_activation_required_page():
                                         # Check if this is the currently active key
                                         activation_key = record.get('activation_key', '')
                                         current_key = get_current_activation_key()
-                                        
+
                                         if current_key == activation_key:
                                             st.success(f"🚫 Key deactivated! System will require reactivation on next restart.")
                                         else:
@@ -2885,7 +2900,7 @@ def show_activation_required_page():
                             if st.button("🚫 Deactivate All Active Keys"):
                                 deactivated_count = 0
                                 current_key = get_current_activation_key()
-                                
+
                                 for record in records:
                                     if record.get('status', 'generated') != 'deactivated':
                                         record['status'] = 'deactivated'
@@ -2901,7 +2916,7 @@ def show_activation_required_page():
                                 # This allows the system to detect deactivation on next check
                                 if current_key and any(r.get('activation_key') == current_key for r in records):
                                     st.warning(f"🚫 Current system key {current_key} has been deactivated! System will require reactivation on next restart.")
-                                
+
                                 st.success(f"🚫 Deactivated {deactivated_count} keys!")
                                 st.rerun()
 
@@ -2934,7 +2949,7 @@ def show_activation_required_page():
                                 st.error(f"🚫 Current key {current_key} is DEACTIVATED - System will require reactivation!")
                             else:
                                 st.success(f"✅ Current key {current_key} is ACTIVE")
-                                
+
                                 # Quick deactivate current key button
                                 if st.button("🚫 Deactivate Current System Key", type="secondary"):
                                     # Find and deactivate current key
@@ -2944,11 +2959,11 @@ def show_activation_required_page():
                                             record['deactivated_date'] = datetime.datetime.now().isoformat()
                                             record['deactivated_by'] = 'teacher_bamstep'
                                             break
-                                    
+
                                     # Save updated records
                                     with open("activation_records.json", 'w') as f:
                                         json.dump(records, f, indent=2)
-                                    
+
                                     st.success(f"🚫 Current key {current_key} deactivated! System will require reactivation on next restart.")
                                     st.rerun()
                         else:
@@ -2956,8 +2971,25 @@ def show_activation_required_page():
 
                     else:
                         st.info("No activation records found.")
-                except:
-                    st.error("Error loading activation records.")
+                except json.JSONDecodeError as e:
+                    st.error(f"Activation records file is corrupted. Error: {str(e)}")
+                    st.info("Click below to reset the activation records file:")
+                    if st.button("🔄 Reset Activation Records File"):
+                        with open("activation_records.json", 'w') as f:
+                            json.dump([], f, indent=2)
+                        st.success("✅ Activation records file reset!")
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Error loading activation records: {str(e)}")
+                    st.info("The activation records file may be corrupted or inaccessible.")
+                    if st.button("🔄 Create New Activation Records File"):
+                        try:
+                            with open("activation_records.json", 'w') as f:
+                                json.dump([], f, indent=2)
+                            st.success("✅ New activation records file created!")
+                            st.rerun()
+                        except Exception as create_error:
+                            st.error(f"Failed to create new file: {str(create_error)}")
 
     # Activation key input for schools
     st.markdown("---")
@@ -3006,13 +3038,13 @@ def show_activation_required_page():
 
             with st.form("support_config_form"):
                 support_contact = st.text_input("Support Contact Name", 
-                                               value=support_config.get('contact_name', 'teacher_bamstep'))
+                                               value=support_config.get('contact_name', 'School ICT'))
                 support_email = st.text_input("Support Email", 
-                                            value=support_config.get('email', 'bamstep@akinssunrise.edu.ng'))
+                                            value=support_config.get('email', 'bamidelestephen224@gmail.com'))
                 support_phone = st.text_input("Support Phone", 
-                                            value=support_config.get('phone', '+234 800 123 4567'))
+                                            value=support_config.get('phone', '08153919612'))
                 support_message = st.text_area("Support Message", 
-                                             value=support_config.get('message', 'Please have your payment receipt ready when contacting support.'))
+                                             value=support_config.get('message', 'Need help with activation payment?'))
 
                 if st.form_submit_button("💾 Save Support Info"):
                     new_support_config = {
@@ -3039,26 +3071,17 @@ def show_activation_required_page():
         except:
             support_config = {}
 
-    contact_name = support_config.get('contact_name', 'teacher_bamstep')
-    contact_email = support_config.get('email', 'bamstep@akinssunrise.edu.ng')
-    contact_phone = support_config.get('phone', '+234 800 123 4567')
-    contact_hours = support_config.get('hours', 'Monday - Friday, 9:00 AM - 5:00 PM')
-    contact_message = support_config.get('message', 'Please have your payment receipt ready when contacting support.')
-    contact_instructions = support_config.get('instructions', 'For activation issues, please provide your school name and payment confirmation.')
+    contact_name = support_config.get('contact_name', 'School ICT')
+    contact_email = support_config.get('email', 'bamidelestephen224@gmail.com')
+    contact_phone = support_config.get('phone', '08153919612')
+    contact_message = support_config.get('message', 'Need help with activation payment?')
 
     st.info(f"""
-**Need help with activation?**
+**{contact_message}**
 
 📞 **Contact:** {contact_name}
 📧 **Email:** {contact_email}
-📱 **Phone:** {contact_phone}
-🕐 **Hours:** {contact_hours}
-
-**Support Message:**
-{contact_message}
-
-**Instructions:**
-{contact_instructions}
+📱 **Phone:** {contact_phone} or visit the school ICT
     """)
 
 def staff_login_form():
@@ -4034,7 +4057,7 @@ def verification_tab():
 
                 if report_found and report_data:
                     st.success("✅ **Report Verified Successfully!**")
-                    
+
                     # Check if report is persistent (survives restarts)
                     is_persistent = report_data.get('persistent', False)
                     restart_safe = "✅ Restart-Safe" if is_persistent else "⚠️ Session-Only"
@@ -6330,12 +6353,17 @@ def report_generator_page():
     # Check activation status for all authenticated users (including teacher_bamstep)
     is_activated, activation_status, expiry_date = check_activation_status()
     if not is_activated:
-        st.error("🚨 System activation has expired or been disabled. Please reactivate the system.")
-        st.info("🔄 Redirecting to activation page...")
-        # Clear authentication and redirect to login/activation page
-        st.session_state.authenticated = False
-        st.session_state.teacher_id = None
-        st.rerun()
+        # Check if this is developer bypass
+        if activation_status.get('status') == 'developer_bypass':
+            st.warning("🚨 **DEVELOPER MODE**: System activation is disabled but you have developer access.")
+            st.info("💡 Generate a new activation key in the Admin Panel → System Configuration → Activation Settings")
+        else:
+            st.error("🚨 System activation has expired or been disabled. Please reactivate the system.")
+            st.info("🔄 Redirecting to activation page...")
+            # Clear authentication and redirect to login/activation page
+            st.session_state.authenticated = False
+            st.session_state.teacher_id = None
+            st.rerun()
 
     # Check session timeout
     if check_session_timeout():
