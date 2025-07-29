@@ -1957,7 +1957,9 @@ def log_teacher_activity(teacher_id, activity_type, details):
         return False
 
 def render_html_report(student_name, student_class, term, report_df, term_total, cumulative, final_grade, logo_base64, student_data=None, report_details=None, report_id=None):
-    date_now = datetime.datetime.now().strftime("%A, %B %d, %Y, %I:%M %p WAT")
+    # Use Nigeria timezone (WAT = UTC+1)
+    nigeria_time = datetime.datetime.now() + datetime.timedelta(hours=1)
+    date_now = nigeria_time.strftime("%A, %B %d, %Y, %I:%M %p WAT")
     if report_id is None:
         report_id = generate_report_id()
     school_code = "ASS2025"
