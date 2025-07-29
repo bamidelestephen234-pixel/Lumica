@@ -876,14 +876,14 @@ def generate_class_reports(student_class, term, subject_scores_dict):
                     last_cumulative = scores.get('last_cumulative', 0)
 
                     total = calculate_total(ca, exam)
-                    
+
                     # For 1st term, cumulative is same as current term total
                     if term == "1st Term":
                         subject_cumulative = total
                     else:
                         # For 2nd and 3rd terms, average with previous cumulative
                         subject_cumulative = (total + last_cumulative) / 2
-                        
+
                     total_term_score += total
                     all_cumulatives.append(subject_cumulative)
 
@@ -1145,8 +1145,11 @@ def save_pending_report(report_data):
         filename = f"pending_{report_data['report_id']}.json"
         filepath = os.path.join(pending_dir, filename)
 
+        # Ensure data persistence by using flush and sync
         with open(filepath, 'w') as f:
             json.dump(report_data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
 
         pdf_filename = f"pending_{report_data['report_id']}.pdf"
         pdf_path = os.path.join(pending_dir, pdf_filename)
@@ -1155,6 +1158,7 @@ def save_pending_report(report_data):
 
         return True
     except Exception as e:
+        print(f"Error saving pending report: {e}")
         return False
 
 def get_pending_reports():
@@ -1189,24 +1193,56 @@ def auto_approve_report(report_data):
         report_data['status'] = 'approved'
         report_data['approved_date'] = datetime.datetime.now().isoformat()
         report_data['approved_by'] = 'auto_system'
+        
+        # Add persistence markers
+        report_data['persistent'] = True
+        report_data['backup_created'] = datetime.datetime.now().isoformat()
 
         approved_path = os.path.join(approved_dir, f"approved_{report_data['report_id']}.json")
-        with open(approved_path, 'w') as f:
-            json.dump(report_data, f, indent=2)
+        
+        # Enhanced data persistence with multiple write attempts
+        for attempt in range(3):
+            try:
+                with open(approved_path, 'w') as f:
+                    json.dump(report_data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                
+                # Verify file was written correctly
+                with open(approved_path, 'r') as f:
+                    test_data = json.load(f)
+                    if test_data.get('report_id') == report_data['report_id']:
+                        break
+            except Exception as e:
+                if attempt == 2:  # Last attempt
+                    raise e
+                continue
 
         # Save PDF directly to approved folder
         approved_pdf_path = os.path.join(approved_dir, f"approved_{report_data['report_id']}.pdf")
         HTML(string=report_data['html_content']).write_pdf(approved_pdf_path)
 
+        # Create multiple backups for extra persistence
+        backup_locations = ["report_backup", "report_archive", "verified_reports"]
+        for backup_dir in backup_locations:
+            os.makedirs(backup_dir, exist_ok=True)
+            backup_path = os.path.join(backup_dir, f"backup_{report_data['report_id']}.json")
+            with open(backup_path, 'w') as f:
+                json.dump(report_data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
         log_teacher_activity(st.session_state.get('teacher_id', 'system'), "report_auto_approved", {
             "report_id": report_data['report_id'],
             "student_name": report_data['student_name'],
-            "auto_approved": True
+            "auto_approved": True,
+            "persistent": True
         })
 
-        return True, f"Report automatically approved and saved"
+        return True, f"Report automatically approved and saved with enhanced persistence"
 
     except Exception as e:
+        print(f"Error auto-approving report: {e}")
         return False, f"Error auto-approving report: {str(e)}"
 
 def reject_report(report_id, reason=""):
@@ -1597,10 +1633,6 @@ def check_activation_status():
     try:
         config = load_activation_config()
 
-        # Clear any cached activation state if activation was just enabled
-        if 'activation_check_done' in st.session_state:
-            del st.session_state.activation_check_done
-
         # If activation is disabled in config, system is not activated regardless of other factors
         if not config.get('activation_enabled', True):
             return False, {"status": "activation_disabled"}, None
@@ -1608,7 +1640,12 @@ def check_activation_status():
         if os.path.exists("activation_status.json"):
             with open("activation_status.json", 'r') as f:
                 status = json.load(f)
-                
+
+                # Check if the activation key is deactivated
+                activation_key = status.get('activation_key')
+                if activation_key and is_activation_key_deactivated(activation_key):
+                    return False, {"status": "key_deactivated", "activation_key": activation_key}, None
+
                 # Check if the status indicates activation
                 if status.get('activated', False):
                     activation_date = status.get('activation_date')
@@ -1647,6 +1684,31 @@ def check_activation_status():
     except Exception as e:
         print(f"Check activation status error: {e}")
         return False, {}, None  # Default to not activated if there's an error
+
+def is_activation_key_deactivated(activation_key):
+    """Check if an activation key has been deactivated"""
+    try:
+        if os.path.exists("activation_records.json"):
+            with open("activation_records.json", 'r') as f:
+                records = json.load(f)
+                
+            for record in records:
+                if record.get('activation_key') == activation_key:
+                    return record.get('status', 'generated') == 'deactivated'
+        return False
+    except Exception:
+        return False
+
+def get_current_activation_key():
+    """Get the currently active activation key"""
+    try:
+        if os.path.exists("activation_status.json"):
+            with open("activation_status.json", 'r') as f:
+                status = json.load(f)
+                return status.get('activation_key')
+        return None
+    except Exception:
+        return None
 
 def generate_activation_key():
     """Generate a unique activation key"""
@@ -1711,20 +1773,40 @@ def activate_system(activation_key, subscription_type="monthly"):
             "activation_key": activation_key,
             "subscription_type": key_subscription_type,
             "activated_by": "system",
-            "activation_method": "key_input"
+            "activation_method": "key_input",
+            "persistent": True,
+            "restart_safe": True
         }
 
-        with open("activation_status.json", 'w') as f:
-            json.dump(activation_data, f, indent=2)
-
-        # Verify the file was written correctly
-        if os.path.exists("activation_status.json"):
+        # Enhanced persistence with multiple write attempts
+        for attempt in range(3):
             try:
+                with open("activation_status.json", 'w') as f:
+                    json.dump(activation_data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                
+                # Verify the file was written correctly
                 with open("activation_status.json", 'r') as f:
                     test_data = json.load(f)
-                    return test_data.get('activated', False)
+                    if test_data.get('activated', False) and test_data.get('activation_key') == activation_key:
+                        break
+            except Exception as e:
+                if attempt == 2:  # Last attempt
+                    print(f"Final activation write attempt failed: {e}")
+                    return False
+                continue
+
+        # Create backup activation files for extra persistence
+        backup_files = ["activation_backup.json", "system_status.json"]
+        for backup_file in backup_files:
+            try:
+                with open(backup_file, 'w') as f:
+                    json.dump(activation_data, f, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
             except:
-                return False
+                continue
 
         return True
     except Exception as e:
@@ -2292,525 +2374,169 @@ def render_html_report(student_name, student_class, term, report_df, term_total,
 def apply_custom_css():
     st.markdown("""
     <style>
-    /* Main app container */
+    /* Clean, readable styling that works in both light and dark modes */
     .stApp {
-        max-width: 100vw;
-        overflow-x: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
 
-    /* Animation for activation key display */
-    @keyframes shine {
-        0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
-        50% { transform: translateX(100%) translateY(100%) rotate(45deg); }
-        100% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
-    }
-
-    /* Text visibility for both themes */
+    /* Headers with good contrast */
     h1, h2, h3, h4, h5, h6 {
-        color: #1976D2 !important;
+        font-weight: 600 !important;
     }
 
-    /* Button styling */
+    /* Clean button styling */
     .stButton button {
-        background-color: #1976D2 !important;
+        background: #1976D2 !important;
         color: white !important;
         border: none !important;
-        border-radius: 8px !important;
+        border-radius: 6px !important;
         padding: 0.5rem 1rem !important;
-        font-weight: 600 !important;
-        transition: all 0.3s ease !important;
-        box-shadow: 0 2px 4px rgba(25, 118, 210, 0.2) !important;
+        font-weight: 500 !important;
+        transition: all 0.2s ease !important;
     }
 
     .stButton button:hover {
-        background-color: #1565C0 !important;
+        background: #1565C0 !important;
         transform: translateY(-1px) !important;
-        box-shadow: 0 4px 8px rgba(25, 118, 210, 0.3) !important;
     }
 
-    /* Enhanced responsive tabs with premium styling and better sizing */
+    /* Simple tab styling */
     .stTabs [data-baseweb="tab-list"] {
-        background: linear-gradient(135deg, rgba(25, 118, 210, 0.03) 0%, rgba(33, 150, 243, 0.05) 50%, rgba(25, 118, 210, 0.03) 100%) !important;
-        border: 2px solid rgba(25, 118, 210, 0.12) !important;
-        border-radius: 16px !important;
-        box-shadow: 0 8px 32px rgba(25, 118, 210, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
-        display: flex !important;
-        flex-wrap: wrap !important;
-        justify-content: center !important;
-        align-items: center !important;
-        padding: 16px !important;
-        margin: 24px auto !important;
-        width: 100% !important;
-        max-width: none !important;
-        overflow: visible !important;
-        overflow-x: auto !important;
-        backdrop-filter: blur(20px) !important;
-        position: relative !important;
-        min-height: 85px !important;
         gap: 8px !important;
-    }
-
-    .stTabs [data-baseweb="tab-list"]::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
-        border-radius: 14px;
-        pointer-events: none;
-        z-index: 0;
+        padding: 8px !important;
+        border-bottom: 2px solid #e0e0e0 !important;
+        background: transparent !important;
     }
 
     .stTabs [data-baseweb="tab-list"] button {
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(248, 250, 252, 0.8)) !important;
-        color: #374151 !important;
-        border: 2px solid rgba(25, 118, 210, 0.08) !important;
-        border-radius: 12px !important;
-        padding: 14px 20px !important;
-        margin: 4px !important;
-        font-weight: 600 !important;
-        font-size: 0.95rem !important;
-        line-height: 1.3 !important;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        backdrop-filter: blur(12px) !important;
-        flex: 0 0 auto !important;
-        min-width: 150px !important;
-        max-width: 220px !important;
-        text-align: center !important;
-        white-space: normal !important;
-        overflow: visible !important;
-        text-overflow: clip !important;
-        position: relative !important;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04), inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
-        z-index: 1 !important;
-        height: auto !important;
-        min-height: 50px !important;
-    }
-
-    .stTabs [data-baseweb="tab-list"] button::before {
-        content: '';
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: linear-gradient(135deg, rgba(25, 118, 210, 0.05), rgba(33, 150, 243, 0.08));
-        border-radius: 10px;
-        opacity: 0;
-        transition: all 0.4s ease;
-        z-index: -1;
-    }
-
-    .stTabs [data-baseweb="tab-list"] button::after {
-        content: '';
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 0;
-        height: 0;
-        background: radial-gradient(circle, rgba(25, 118, 210, 0.2), transparent 70%);
-        border-radius: 50%;
-        transform: translate(-50%, -50%);
-        transition: all 0.4s ease;
-        z-index: -1;
+        background: transparent !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 8px 16px !important;
+        font-weight: 500 !important;
+        color: #666 !important;
+        transition: all 0.2s ease !important;
     }
 
     .stTabs [data-baseweb="tab-list"] button:hover {
-        background: linear-gradient(135deg, rgba(25, 118, 210, 0.08), rgba(33, 150, 243, 0.05)) !important;
-        color: #1976D2 !important;
-        border-color: rgba(25, 118, 210, 0.25) !important;
-        transform: translateY(-3px) scale(1.02) !important;
-        box-shadow: 0 8px 25px rgba(25, 118, 210, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
-    }
-
-    .stTabs [data-baseweb="tab-list"] button:hover::before {
-        opacity: 1;
-    }
-
-    .stTabs [data-baseweb="tab-list"] button:hover::after {
-        width: 100%;
-        height: 100%;
+        background: #f5f5f5 !important;
+        color: #333 !important;
     }
 
     .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
-        background: linear-gradient(135deg, #1976D2 0%, #2196F3 50%, #42A5F5 100%) !important;
+        background: #1976D2 !important;
         color: white !important;
-        border-color: #1565C0 !important;
-        font-weight: 700 !important;
-        transform: translateY(-3px) scale(1.05) !important;
-        box-shadow: 0 12px 32px rgba(25, 118, 210, 0.3), 0 4px 12px rgba(25, 118, 210, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2) !important;
-        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1) !important;
-    }
-
-    .stTabs [data-baseweb="tab-list"] button[aria-selected="true"]::before {
-        opacity: 0;
-    }
-
-    .stTabs [data-baseweb="tab-list"] button[aria-selected="true"]::after {
-        width: 100%;
-        height: 100%;
-        background: radial-gradient(circle, rgba(255, 255, 255, 0.1), transparent 70%);
-    }
-
-    /* Tab text visibility */
-    .stTabs [data-baseweb="tab-list"] button * {
-        color: inherit !important;
-        font-weight: inherit !important;
-    }
-
-    /* Form elements */
-    .stTextInput label, .stSelectbox label, .stNumberInput label, .stTextArea label {
-        color: #1976D2 !important;
         font-weight: 600 !important;
-        margin-bottom: 0.5rem !important;
     }
 
+    /* Form elements with good contrast */
     .stTextInput input, .stNumberInput input, .stTextArea textarea, .stSelectbox select {
-        border: 2px solid #e9ecef !important;
-        border-radius: 8px !important;
-        padding: 0.75rem !important;
-        transition: all 0.3s ease !important;
-        background: var(--background-color, rgba(255, 255, 255, 0.9)) !important;
-        color: var(--text-color, #333) !important;
+        border: 1px solid #ddd !important;
+        border-radius: 4px !important;
+        padding: 0.5rem !important;
     }
 
     .stTextInput input:focus, .stNumberInput input:focus, .stTextArea textarea:focus {
         border-color: #1976D2 !important;
-        box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1) !important;
+        box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.2) !important;
         outline: none !important;
-    }
-
-    /* Dark theme support for inputs */
-    [data-theme="dark"] .stTextInput input,
-    [data-theme="dark"] .stNumberInput input,
-    [data-theme="dark"] .stTextArea textarea,
-    [data-theme="dark"] .stSelectbox select {
-        background: rgba(45, 55, 72, 0.8) !important;
-        color: #e2e8f0 !important;
-        border-color: #4a5568 !important;
-    }
-
-    [data-theme="dark"] .stTextInput input:focus,
-    [data-theme="dark"] .stNumberInput input:focus,
-    [data-theme="dark"] .stTextArea textarea:focus {
-        border-color: #42A5F5 !important;
-        box-shadow: 0 0 0 3px rgba(66, 165, 245, 0.2) !important;
-    }
-
-    /* Alternative dark mode detection */
-    @media (prefers-color-scheme: dark) {
-        .stTextInput input,
-        .stNumberInput input,
-        .stTextArea textarea,
-        .stSelectbox select {
-            background: rgba(45, 55, 72, 0.9) !important;
-            color: #e2e8f0 !important;
-            border-color: #4a5568 !important;
-        }
-
-        .stTextInput input:focus,
-        .stNumberInput input:focus,
-        .stTextArea textarea:focus {
-            border-color: #42A5F5 !important;
-            box-shadow: 0 0 0 3px rgba(66, 165, 245, 0.2) !important;
-        }
-
-        .stTextInput input::placeholder,
-        .stNumberInput input::placeholder,
-        .stTextArea textarea::placeholder {
-            color: #a0aec0 !important;
-        }
-    }
-
-    /* Metrics styling */
-    .metric-container {
-        background: linear-gradient(135deg, rgba(25, 118, 210, 0.05), rgba(33, 150, 243, 0.05)) !important;
-        border: 1px solid rgba(25, 118, 210, 0.2) !important;
-        border-radius: 12px !important;
-        padding: 1.5rem !important;
-        backdrop-filter: blur(10px) !important;
     }
 
     /* Message styling */
     .stSuccess {
-        background: linear-gradient(135deg, rgba(76, 175, 80, 0.1), rgba(129, 199, 132, 0.1)) !important;
+        background: #e8f5e8 !important;
         border: 1px solid #4CAF50 !important;
-        border-radius: 8px !important;
+        border-radius: 4px !important;
         padding: 1rem !important;
     }
 
     .stError {
-        background: linear-gradient(135deg, rgba(244, 67, 54, 0.1), rgba(229, 115, 115, 0.1)) !important;
+        background: #ffeaea !important;
         border: 1px solid #F44336 !important;
-        border-radius: 8px !important;
+        border-radius: 4px !important;
         padding: 1rem !important;
     }
 
     .stWarning {
-        background: linear-gradient(135deg, rgba(255, 152, 0, 0.1), rgba(255, 183, 77, 0.1)) !important;
+        background: #fff3e0 !important;
         border: 1px solid #FF9800 !important;
-        border-radius: 8px !important;
+        border-radius: 4px !important;
         padding: 1rem !important;
     }
 
     .stInfo {
-        background: linear-gradient(135deg, rgba(33, 150, 243, 0.1), rgba(100, 181, 246, 0.1)) !important;
+        background: #e3f2fd !important;
         border: 1px solid #2196F3 !important;
-        border-radius: 8px !important;
+        border-radius: 4px !important;
         padding: 1rem !important;
     }
 
-    /* Expander styling */
-    .streamlit-expanderHeader {
-        background: linear-gradient(135deg, rgba(25, 118, 210, 0.05), rgba(33, 150, 243, 0.05)) !important;
-        border: 1px solid rgba(25, 118, 210, 0.2) !important;
-        border-radius: 8px !important;
-        color: #1976D2 !important;
-        font-weight: 600 !important;
-        padding: 1rem !important;
-    }
-
-    /* Enhanced mobile responsiveness with better tab sizing */
-    @media (max-width: 768px) {
-        .main > div {
-            padding: 0.5rem !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] {
-            padding: 12px !important;
-            margin: 15px 0 !important;
-            flex-wrap: wrap !important;
-            justify-content: center !important;
-            gap: 6px !important;
-            border-radius: 12px !important;
-            width: 100% !important;
-            overflow-x: auto !important;
-            overflow-y: visible !important;
-            min-height: 100px !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] button {
-            padding: 12px 16px !important;
-            font-size: 0.85rem !important;
-            line-height: 1.2 !important;
-            margin: 3px !important;
-            min-width: 130px !important;
-            max-width: 160px !important;
-            flex: 0 0 auto !important;
-            border-radius: 10px !important;
-            white-space: normal !important;
-            height: auto !important;
-            min-height: 45px !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] button:hover {
-            transform: translateY(-2px) scale(1.01) !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
-            transform: translateY(-2px) scale(1.03) !important;
-        }
-
-        h1 {
-            font-size: 1.8rem !important;
-            text-align: center !important;
-        }
-
-        h2 {
-            font-size: 1.4rem !important;
-        }
-
-        h3 {
-            font-size: 1.2rem !important;
-        }
-
-        .stButton > button {
-            width: 100% !important;
-            margin-bottom: 0.5rem !important;
-        }
-    }
-
-    /* Enhanced tablet responsiveness with improved tab display */
-    @media (min-width: 769px) and (max-width: 1024px) {
-        .main > div {
-            padding: 1rem !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] {
-            padding: 14px !important;
-            flex-wrap: wrap !important;
-            justify-content: center !important;
-            gap: 8px !important;
-            width: 100% !important;
-            overflow-x: auto !important;
-            min-height: 90px !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] button {
-            padding: 13px 18px !important;
-            font-size: 0.9rem !important;
-            line-height: 1.3 !important;
-            margin: 3px !important;
-            min-width: 140px !important;
-            max-width: 180px !important;
-            flex: 0 0 auto !important;
-            white-space: normal !important;
-            height: auto !important;
-            min-height: 48px !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] button:hover {
-            transform: translateY(-2px) scale(1.01) !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
-            transform: translateY(-2px) scale(1.03) !important;
-        }
-    }
-
-    /* Enhanced large screens with better tab sizing */
-    @media (min-width: 1025px) {
-        .stTabs [data-baseweb="tab-list"] {
-            flex-wrap: wrap !important;
-            justify-content: center !important;
-            gap: 10px !important;
-            width: 100% !important;
-            overflow-x: visible !important;
-            padding: 18px !important;
-            min-height: 88px !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] button {
-            flex: 0 0 auto !important;
-            max-width: 200px !important;
-            min-width: 160px !important;
-            padding: 15px 22px !important;
-            font-size: 1rem !important;
-            line-height: 1.3 !important;
-            white-space: normal !important;
-            height: auto !important;
-            min-height: 52px !important;
-        }
-    }
-
-    /* Ultra-wide screens with even better spacing */
-    @media (min-width: 1400px) {
-        .stTabs [data-baseweb="tab-list"] {
-            max-width: 1300px !important;
-            padding: 20px !important;
-            gap: 12px !important;
-            min-height: 92px !important;
-        }
-
-        .stTabs [data-baseweb="tab-list"] button {
-            max-width: 240px !important;
-            min-width: 180px !important;
-            padding: 16px 24px !important;
-            font-size: 1.05rem !important;
-            line-height: 1.4 !important;
-            min-height: 55px !important;
-        }
-    }
-
-    /* Dark theme support */
+    /* Dark mode support */
     @media (prefers-color-scheme: dark) {
         .stTabs [data-baseweb="tab-list"] {
-            background: linear-gradient(135deg, #2d3748 0%, #4a5568 100%) !important;
-            border-color: #4a5568 !important;
+            border-bottom-color: #444 !important;
         }
 
         .stTabs [data-baseweb="tab-list"] button {
-            background: rgba(45, 55, 72, 0.8) !important;
-            color: #e2e8f0 !important;
+            color: #ccc !important;
         }
 
         .stTabs [data-baseweb="tab-list"] button:hover {
-            background: rgba(25, 118, 210, 0.2) !important;
+            background: #333 !important;
+            color: #fff !important;
         }
 
-        /* Form labels in dark mode */
-        .stTextInput label, .stSelectbox label, .stNumberInput label, .stTextArea label {
-            color: #42A5F5 !important;
+        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
+            background: #1976D2 !important;
+            color: white !important;
         }
 
-        /* Expander styling in dark mode */
-        .streamlit-expanderHeader {
-            background: linear-gradient(135deg, rgba(45, 55, 72, 0.8), rgba(74, 85, 104, 0.6)) !important;
-            border: 1px solid rgba(66, 165, 245, 0.3) !important;
-            color: #42A5F5 !important;
+        .stTextInput input, .stNumberInput input, .stTextArea textarea, .stSelectbox select {
+            background: #2d2d2d !important;
+            color: #fff !important;
+            border-color: #555 !important;
         }
 
-        /* Metric containers in dark mode */
-        .metric-container {
-            background: linear-gradient(135deg, rgba(45, 55, 72, 0.8), rgba(74, 85, 104, 0.6)) !important;
-            border: 1px solid rgba(66, 165, 245, 0.3) !important;
-        }
-
-        /* Message boxes in dark mode */
         .stSuccess {
-            background: linear-gradient(135deg, rgba(76, 175, 80, 0.2), rgba(129, 199, 132, 0.2)) !important;
-            border: 1px solid rgba(76, 175, 80, 0.5) !important;
+            background: rgba(76, 175, 80, 0.1) !important;
+            border-color: #4CAF50 !important;
+            color: #4CAF50 !important;
         }
 
         .stError {
-            background: linear-gradient(135deg, rgba(244, 67, 54, 0.2), rgba(229, 115, 115, 0.2)) !important;
-            border: 1px solid rgba(244, 67, 54, 0.5) !important;
+            background: rgba(244, 67, 54, 0.1) !important;
+            border-color: #F44336 !important;
+            color: #F44336 !important;
         }
 
         .stWarning {
-            background: linear-gradient(135deg, rgba(255, 152, 0, 0.2), rgba(255, 183, 77, 0.2)) !important;
-            border: 1px solid rgba(255, 152, 0, 0.5) !important;
+            background: rgba(255, 152, 0, 0.1) !important;
+            border-color: #FF9800 !important;
+            color: #FF9800 !important;
         }
 
         .stInfo {
-            background: linear-gradient(135deg, rgba(33, 150, 243, 0.2), rgba(100, 181, 246, 0.2)) !important;
-            border: 1px solid rgba(33, 150, 243, 0.5) !important;
+            background: rgba(33, 150, 243, 0.1) !important;
+            border-color: #2196F3 !important;
+            color: #2196F3 !important;
         }
     }
 
-    /* High contrast mode */
-    @media (prefers-contrast: high) {
+    /* Mobile responsiveness */
+    @media (max-width: 768px) {
+        .stTabs [data-baseweb="tab-list"] {
+            flex-wrap: wrap !important;
+        }
+
         .stTabs [data-baseweb="tab-list"] button {
-            border-width: 3px !important;
+            flex: 1 1 auto !important;
+            min-width: 120px !important;
+            margin: 2px !important;
         }
 
-        .stTabs [data-baseweb="tab-list"] button[aria-selected="true"] {
-            border-width: 4px !important;
+        .stButton button {
+            width: 100% !important;
         }
-    }
-
-    /* Custom scrollbar for mobile tab overflow */
-    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {
-        height: 4px;
-    }
-
-    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar-track {
-        background: rgba(0, 0, 0, 0.1);
-        border-radius: 2px;
-    }
-
-    .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar-thumb {
-        background: #1976D2;
-        border-radius: 2px;
-    }
-
-    /* Improved visual hierarchy */
-    .stMarkdown strong {
-        color: #1976D2 !important;
-        font-weight: 700 !important;
-    }
-
-    /* Better spacing for content */
-    .element-container {
-        margin-bottom: 1rem !important;
-    }
-
-    /* Header improvements */
-    .main .block-container {
-        padding-top: 2rem !important;
-        max-width: 100% !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -2863,11 +2589,17 @@ def login_page():
         """, unsafe_allow_html=True)
 
     st.markdown("""
-    <div style="text-align: center; margin-bottom: 30px;">
-        <h1 style="color: var(--accent-color); margin: 10px 0;">🔐 Staff Login</h1>
-        <h2 style="color: var(--text-secondary); margin: 5px 0;">Akin's Sunrise School System</h2>
+    <div style="text-align: center; margin-bottom: 40px;">
+        <h1 style="margin: 20px 0;">🔐 Staff Login</h1>
+        <p style="color: #64748b; font-size: 1.125rem; font-weight: 400; margin: 0;">Akin's Sunrise School Management System</p>
     </div>
     """, unsafe_allow_html=True)
+
+    # Show current activation key in simple text format
+    current_activation_key = get_current_activation_key()
+    if current_activation_key and is_activated:
+        st.success(f"🔑 **Current Activation Key:** `{current_activation_key}`")
+        st.info("💡 Save this key - you can use it to reactivate if the system restarts")
 
     # Show activation key info if available (but not just generated)
     if st.session_state.get('generated_activation_key') and not st.session_state.get('just_generated'):
@@ -2918,11 +2650,50 @@ def show_activation_required_page():
     config = load_activation_config()
     is_activated, activation_status, expiry_date = check_activation_status()
 
-    # Show specific message if activation was disabled
+    # Show specific message if activation was disabled or key deactivated
     if activation_status.get('status') == 'activation_disabled':
         st.error("🚨 **SYSTEM DEACTIVATED**")
         st.warning("⚠️ The system activation has been disabled. A new activation key must be generated and activated to continue using the system.")
         st.info("🔄 This applies to all users including administrators.")
+    elif activation_status.get('status') == 'key_deactivated':
+        deactivated_key = activation_status.get('activation_key', 'Unknown')
+        st.error("🚨 **ACTIVATION KEY DEACTIVATED**")
+        st.warning(f"⚠️ The activation key `{deactivated_key}` has been deactivated by the administrator.")
+        st.info("🔄 This key will no longer work even if the system restarts. A new activation key must be generated.")
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #f44336, #d32f2f); 
+            border: 3px solid #b71c1c; 
+            border-radius: 15px; 
+            padding: 20px; 
+            text-align: center; 
+            margin: 20px 0;
+            box-shadow: 0 6px 20px rgba(244, 67, 54, 0.3);
+        ">
+            <h3 style="color: white; margin: 0 0 10px 0; font-size: 18px; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+                🚫 DEACTIVATED KEY
+            </h3>
+            <div style="
+                background: rgba(255,255,255,0.95); 
+                border-radius: 10px; 
+                padding: 15px; 
+                margin: 10px 0;
+                box-shadow: inset 0 2px 10px rgba(0,0,0,0.1);
+            ">
+                <div style="
+                    font-family: 'Courier New', monospace; 
+                    font-size: 24px; 
+                    font-weight: bold; 
+                    color: #d32f2f; 
+                    letter-spacing: 2px;
+                    text-decoration: line-through;
+                ">{deactivated_key}</div>
+            </div>
+            <p style="color: white; margin: 10px 0 0 0; font-size: 14px; text-shadow: 1px 1px 2px rgba(0,0,0,0.3);">
+                This key has been permanently deactivated
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Show generated activation key prominently at the top if just generated
     if st.session_state.get('generated_activation_key') and st.session_state.get('just_generated'):
@@ -2930,73 +2701,10 @@ def show_activation_required_page():
         st.balloons()
         st.markdown("## 🎉 Activation Key Successfully Generated!")
 
-        # Enhanced activation key display
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(135deg, #4CAF50, #45a049); 
-            border: 4px solid #2e7d32; 
-            border-radius: 20px; 
-            padding: 30px; 
-            text-align: center; 
-            margin: 20px 0;
-            box-shadow: 0 8px 32px rgba(76, 175, 80, 0.3);
-            position: relative;
-            overflow: hidden;
-        ">
-            <div style="
-                position: absolute;
-                top: -50%;
-                left: -50%;
-                width: 200%;
-                height: 200%;
-                background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-                animation: shine 3s ease-in-out infinite;
-            "></div>
-            <div style="position: relative; z-index: 1;">
-                <h2 style="
-                    color: white; 
-                    margin: 0 0 15px 0; 
-                    font-size: 28px; 
-                    font-weight: bold;
-                    text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
-                ">🔑 ACTIVATION KEY GENERATED</h2>
-                <div style="
-                    background: rgba(255,255,255,0.95); 
-                    border-radius: 15px; 
-                    padding: 20px; 
-                    margin: 15px 0;
-                    box-shadow: inset 0 2px 10px rgba(0,0,0,0.1);
-                ">
-                    <p style="
-                        color: #2e7d32; 
-                        margin: 0 0 10px 0; 
-                        font-weight: bold; 
-                        font-size: 18px;
-                    ">School: {st.session_state.get('generated_for_school', 'School')}</p>
-                    <div style="
-                        font-family: 'Courier New', monospace; 
-                        font-size: 36px; 
-                        font-weight: bold; 
-                        color: #1565C0; 
-                        letter-spacing: 4px;
-                        text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
-                        margin: 15px 0;
-                        padding: 15px;
-                        background: linear-gradient(145deg, #f0f8ff, #e3f2fd);
-                        border-radius: 10px;
-                        border: 2px dashed #1976D2;
-                    ">{st.session_state.generated_activation_key}</div>
-                </div>
-                <p style="
-                    color: white; 
-                    margin: 15px 0 0 0; 
-                    font-weight: 600;
-                    font-size: 16px;
-                    text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
-                ">📋 Copy this key and share it with the school administration</p>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.success("🎉 **Activation Key Generated Successfully!**")
+        st.code(st.session_state.generated_activation_key, language=None)
+        st.info(f"**School:** {st.session_state.get('generated_for_school', 'School')}")
+        st.info("📋 Copy this key and share it with the school administration")
 
         # Action buttons for the generated key
         col1, col2, col3 = st.columns([1, 1, 1])
@@ -3101,10 +2809,10 @@ def show_activation_required_page():
                             with col1:
                                 if is_deactivated:
                                     st.write(f"~~**{record.get('school_name', 'Unknown')}**~~ (DEACTIVATED)")
-                                    st.write(f"~~Key: `{record.get('activation_key', 'N/A')}`~~")
+                                    st.code(f"{record.get('activation_key', 'N/A')}", language=None)
                                 else:
                                     st.write(f"**{record.get('school_name', 'Unknown')}**")
-                                    st.write(f"Key: `{record.get('activation_key', 'N/A')}`")
+                                    st.code(f"{record.get('activation_key', 'N/A')}", language=None)
 
                             with col2:
                                 st.write(f"Type: {record.get('subscription_type', 'monthly')}")
@@ -3128,28 +2836,23 @@ def show_activation_required_page():
                                 if not is_deactivated:
                                     if st.button(f"🚫 Deactivate", key=f"deactivate_{i}_{record.get('activation_key', '')}"):
                                         # Deactivate the key
-                                        records[-(15-i)]['status'] = 'deactivated'
-                                        records[-(15-i)]['deactivated_date'] = datetime.datetime.now().isoformat()
-                                        records[-(15-i)]['deactivated_by'] = 'teacher_bamstep'
+                                        actual_index = len(records) - 15 + i
+                                        records[actual_index]['status'] = 'deactivated'
+                                        records[actual_index]['deactivated_date'] = datetime.datetime.now().isoformat()
+                                        records[actual_index]['deactivated_by'] = 'teacher_bamstep'
 
-                                        # Save updated records
+                                        # Save updated records with proper file handling
                                         with open("activation_records.json", 'w') as f:
                                             json.dump(records, f, indent=2)
+                                            f.flush()
+                                            os.fsync(f.fileno())
 
-                                        # Also deactivate system if this key was used
+                                        # Check if this is the currently active key
                                         activation_key = record.get('activation_key', '')
-                                        if os.path.exists("activation_status.json"):
-                                            try:
-                                                with open("activation_status.json", 'r') as f:
-                                                    status = json.load(f)
-                                                if status.get('activation_key') == activation_key:
-                                                    # Remove activation status to deactivate system
-                                                    os.remove("activation_status.json")
-                                                    st.success(f"🚫 Key deactivated and system access revoked!")
-                                                else:
-                                                    st.success(f"🚫 Key deactivated!")
-                                            except:
-                                                st.success(f"🚫 Key deactivated!")
+                                        current_key = get_current_activation_key()
+                                        
+                                        if current_key == activation_key:
+                                            st.success(f"🚫 Key deactivated! System will require reactivation on next restart.")
                                         else:
                                             st.success(f"🚫 Key deactivated!")
 
@@ -3157,15 +2860,18 @@ def show_activation_required_page():
                                 else:
                                     if st.button(f"🔄 Reactivate", key=f"reactivate_{i}_{record.get('activation_key', '')}"):
                                         # Reactivate the key
-                                        records[-(15-i)]['status'] = 'generated'
-                                        if 'deactivated_date' in records[-(15-i)]:
-                                            del records[-(15-i)]['deactivated_date']
-                                        if 'deactivated_by' in records[-(15-i)]:
-                                            del records[-(15-i)]['deactivated_by']
+                                        actual_index = len(records) - 15 + i
+                                        records[actual_index]['status'] = 'generated'
+                                        if 'deactivated_date' in records[actual_index]:
+                                            del records[actual_index]['deactivated_date']
+                                        if 'deactivated_by' in records[actual_index]:
+                                            del records[actual_index]['deactivated_by']
 
-                                        # Save updated records
+                                        # Save updated records with proper file handling
                                         with open("activation_records.json", 'w') as f:
                                             json.dump(records, f, indent=2)
+                                            f.flush()
+                                            os.fsync(f.fileno())
 
                                         st.success(f"✅ Key reactivated!")
                                         st.rerun()
@@ -3178,6 +2884,8 @@ def show_activation_required_page():
                         with col1:
                             if st.button("🚫 Deactivate All Active Keys"):
                                 deactivated_count = 0
+                                current_key = get_current_activation_key()
+                                
                                 for record in records:
                                     if record.get('status', 'generated') != 'deactivated':
                                         record['status'] = 'deactivated'
@@ -3189,11 +2897,12 @@ def show_activation_required_page():
                                 with open("activation_records.json", 'w') as f:
                                     json.dump(records, f, indent=2)
 
-                                # Also remove current system activation
-                                if os.path.exists("activation_status.json"):
-                                    os.remove("activation_status.json")
-
-                                st.success(f"🚫 Deactivated {deactivated_count} keys and revoked system access!")
+                                # If current system key was deactivated, show warning but don't remove activation_status.json
+                                # This allows the system to detect deactivation on next check
+                                if current_key and any(r.get('activation_key') == current_key for r in records):
+                                    st.warning(f"🚫 Current system key {current_key} has been deactivated! System will require reactivation on next restart.")
+                                
+                                st.success(f"🚫 Deactivated {deactivated_count} keys!")
                                 st.rerun()
 
                         with col2:
@@ -3214,6 +2923,36 @@ def show_activation_required_page():
 
                                 st.success(f"✅ Reactivated {reactivated_count} keys!")
                                 st.rerun()
+
+                        # Show current system activation key status
+                        st.markdown("---")
+                        st.markdown("#### 🔍 Current System Status")
+                        current_key = get_current_activation_key()
+                        if current_key:
+                            is_deactivated = is_activation_key_deactivated(current_key)
+                            if is_deactivated:
+                                st.error(f"🚫 Current key {current_key} is DEACTIVATED - System will require reactivation!")
+                            else:
+                                st.success(f"✅ Current key {current_key} is ACTIVE")
+                                
+                                # Quick deactivate current key button
+                                if st.button("🚫 Deactivate Current System Key", type="secondary"):
+                                    # Find and deactivate current key
+                                    for record in records:
+                                        if record.get('activation_key') == current_key:
+                                            record['status'] = 'deactivated'
+                                            record['deactivated_date'] = datetime.datetime.now().isoformat()
+                                            record['deactivated_by'] = 'teacher_bamstep'
+                                            break
+                                    
+                                    # Save updated records
+                                    with open("activation_records.json", 'w') as f:
+                                        json.dump(records, f, indent=2)
+                                    
+                                    st.success(f"🚫 Current key {current_key} deactivated! System will require reactivation on next restart.")
+                                    st.rerun()
+                        else:
+                            st.info("No current activation key found.")
 
                     else:
                         st.info("No activation records found.")
@@ -3241,7 +2980,7 @@ def show_activation_required_page():
                 # Clear activation-related session states to force fresh check
                 if 'activation_check_done' in st.session_state:
                     del st.session_state.activation_check_done
-                
+
                 st.info("🔄 Redirecting to login page...")
                 # Wait a moment then rerun
                 import time
@@ -3684,14 +3423,14 @@ def report_generator_tab():
         last_cumulative = st.number_input(f"{subject} - Last Term Cumulative", min_value=0, max_value=100, key=f"{subject}_last")
 
         total = calculate_total(ca, exam)
-        
+
         # For 1st term, cumulative is same as current term total
         if term == "1st Term":
             subject_cumulative = total
         else:
             # For 2nd and 3rd terms, average with previous cumulative
             subject_cumulative = (total + last_cumulative) / 2
-            
+
         total_term_score += total
         all_cumulatives.append(subject_cumulative)
 
@@ -4276,17 +4015,47 @@ def verification_tab():
                                 else:
                                     st.write(f"• {available_id}")
 
-                if report_found and report_data:
-                    st.success("✅ Report Verified Successfully!")
+                # Also check backup location for extra reliability
+                if not report_found:
+                    backup_dir = "report_backup"
+                    if os.path.exists(backup_dir):
+                        for filename in os.listdir(backup_dir):
+                            if filename.endswith('.json'):
+                                filepath = os.path.join(backup_dir, filename)
+                                try:
+                                    with open(filepath, 'r') as f:
+                                        report = json.load(f)
+                                        if report.get('report_id') == report_id:
+                                            report_found = True
+                                            report_data = report
+                                            break
+                                except Exception:
+                                    continue
 
-                    # Enhanced verification badge with blue theme
+                if report_found and report_data:
+                    st.success("✅ **Report Verified Successfully!**")
+                    
+                    # Check if report is persistent (survives restarts)
+                    is_persistent = report_data.get('persistent', False)
+                    restart_safe = "✅ Restart-Safe" if is_persistent else "⚠️ Session-Only"
+
+                    # Modern verification badge
                     st.markdown(f"""
-                    <div style="text-align: center; padding: 15px; border: 3px solid #1976D2; border-radius: 12px; background: linear-gradient(135deg, #e3f2fd, #ffffff); margin: 15px 0; box-shadow: 0 4px 8px rgba(25, 118, 210, 0.2);">
-                        <span style="font-size: 48px; color: #1976D2;">✅</span>
-                        <br><strong style="color: #1976D2; font-size: 24px; font-weight: 700;">VERIFIED AUTHENTIC</strong>
-                        <br><strong style="color: #1565C0; font-size: 16px;">Akin's Sunrise Secondary School</strong>
-                        <br><small style="color: #1976D2; font-size: 14px;">Official Digital Report Card</small>
-                        <br><small style="color: #0D47A1; font-size: 12px;">Cryptographically Secured</small>
+                    <div style="
+                        background: rgba(255, 255, 255, 0.9);
+                        border: 2px solid #10b981;
+                        border-radius: 16px;
+                        padding: 24px;
+                        text-align: center;
+                        margin: 20px 0;
+                        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+                        backdrop-filter: blur(10px);
+                    ">
+                        <div style="font-size: 48px; margin-bottom: 16px;">✅</div>
+                        <h3 style="color: #059669; margin: 8px 0; font-weight: 600;">VERIFIED AUTHENTIC</h3>
+                        <p style="color: #374151; margin: 4px 0; font-weight: 500;">Akin's Sunrise Secondary School</p>
+                        <p style="color: #6b7280; margin: 4px 0; font-size: 0.875rem;">Official Digital Report Card</p>
+                        <p style="color: #9ca3af; margin: 4px 0; font-size: 0.75rem;">Cryptographically Secured • {restart_safe}</p>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -6600,6 +6369,12 @@ def report_generator_page():
         <div style="height: 3px; background: linear-gradient(90deg, transparent, #1976D2, #42A5F5, #1976D2, transparent); border-radius: 2px; margin-top: 1rem;"></div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Show activation key in simple text format
+    current_activation_key = get_current_activation_key()
+    if current_activation_key:
+        st.success(f"🔑 **Current Activation Key:** `{current_activation_key}`")
+        st.info("💡 Save this key - you can use it to reactivate if the system restarts")
 
     # User info and logout in a compact layout
     col1, col2, col3 = st.columns([1, 2, 1])
