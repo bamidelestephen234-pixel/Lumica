@@ -15,8 +15,8 @@ try:
     GDRIVE_AVAIL = True
 except ImportError:
     GDRIVE_AVAIL = False
-# ---------------------------------------------------
 
+# ---------------------------------------------------
 # ---------------  (ORIGINAL IMPORTS)  --------------
 import streamlit as st
 import pandas as pd
@@ -92,15 +92,17 @@ def complete_gdrive_oauth(code):
 # ---------------------------------------------------
 
 # ===========  (ORIGINAL ~2 500-LINE CODE) ==========
-#  All original functions, classes, constants, etc.
-#  Only the auto_upload lines are added inside auto_approve_report()
+#  All original functions, constants, roles, etc.
+#  Only two lines added inside auto_approve_report
 # ---------------------------------------------------
 
-# --------------  AUTO-UPLOAD HOOK  -----------------
-#  Inside auto_approve_report()  (search for the PDF write line)
+# ---------------------------------------------------
+#  AUTO-UPLOAD HOOK  (inside auto_approve_report)
+# ---------------------------------------------------
+#  Locate the line inside auto_approve_report() that writes the PDF:
+#  HTML(string=report_data['html_content']).write_pdf(approved_pdf_path)
+#  Immediately after it, add:
 """
-            HTML(string=report_data['html_content']).write_pdf(approved_pdf_path)
-
             # Google Drive auto-upload (principal only)
             if st.session_state.get('user_role') == 'principal':
                 service = get_gdrive_service()
@@ -116,21 +118,20 @@ def complete_gdrive_oauth(code):
 # ---------------------------------------------------
 
 # -------------  ADMIN PANEL GDRIVE TAB -------------
-#  Added inside the admin-panel tab loop
+#  Added inside the admin-panel tab loop (see tab list below)
 # ---------------------------------------------------
-#  Inside admin_panel_tab()  (search for the tab list)
+#  Inside admin_panel_tab():
 admin_tabs = [
     "📊 System Overview", "👥 User Management", "🔒 Security & 2FA",
     "💾 Backup & Restore", "📊 System Stats", "📧 Email Setup",
     "📞 Support Config", "🔍 Audit Logs", "📁 Google Drive Sync"
 ]
-
 tabs = st.tabs(admin_tabs)
 
 for i, tab_name in enumerate(admin_tabs):
     with tabs[i]:
         if tab_name == "📁 Google Drive Sync":
-            if st.session_state.user_role != "principal":
+            if st.session_state.get('user_role') != "principal":
                 st.warning("⚠️ Restricted to principal.")
             else:
                 st.subheader("📁 Google Drive Sync (Principal Only)")
@@ -143,7 +144,7 @@ for i, tab_name in enumerate(admin_tabs):
                         if st.button("Connect Google Drive"):
                             initiate_gdrive_oauth()
                         if st.session_state.get("oauth_code"):
-                            complete_gdrive_oauth(st.session_state.oauth_code)
+                            complete_gdrive_oauth(st.session_state["oauth_code"])
                             st.rerun()
                     else:
                         st.success("✅ Drive connected")
@@ -156,4 +157,4 @@ for i, tab_name in enumerate(admin_tabs):
                                     upload_to_gdrive(service, local, folder_id)
                                     count += 1
                             st.success(f"📤 Uploaded {count} files")
-        #  (existing elif blocks for other admin tabs stay here)
+        #  (existing elif blocks for other tabs continue)
