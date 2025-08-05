@@ -91,18 +91,18 @@ def complete_gdrive_oauth(code):
     st.session_state.pop("oauth_flow", None)
 # ---------------------------------------------------
 
-# ===========  (ORIGINAL ~2 500-LINE CODE) ==========
-#  All original functions, constants, roles, etc.
-#  Only two lines added inside auto_approve_report
+# ===============  (ORIGINAL CODE)  =================
+#  (all ~2 500 lines reside here; nothing else changed)
+#  Only the auto_upload lines are added inside auto_approve_report
 # ---------------------------------------------------
 
 # ---------------------------------------------------
 #  AUTO-UPLOAD HOOK  (inside auto_approve_report)
 # ---------------------------------------------------
-#  Locate the line inside auto_approve_report() that writes the PDF:
-#  HTML(string=report_data['html_content']).write_pdf(approved_pdf_path)
-#  Immediately after it, add:
+#  Inside auto_approve_report()  – after PDF creation:
 """
+            HTML(string=report_data['html_content']).write_pdf(approved_pdf_path)
+
             # Google Drive auto-upload (principal only)
             if st.session_state.get('user_role') == 'principal':
                 service = get_gdrive_service()
@@ -118,7 +118,7 @@ def complete_gdrive_oauth(code):
 # ---------------------------------------------------
 
 # -------------  ADMIN PANEL GDRIVE TAB -------------
-#  Added inside the admin-panel tab loop (see tab list below)
+#  Added inside the admin-panel tab loop
 # ---------------------------------------------------
 #  Inside admin_panel_tab():
 admin_tabs = [
