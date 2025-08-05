@@ -17,7 +17,7 @@ except ImportError:
     GDRIVE_AVAIL = False
 # ---------------------------------------------------
 
-# ===============  (ORIGINAL IMPORTS)  ===============
+# ---------------  (ORIGINAL IMPORTS)  --------------
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -91,14 +91,18 @@ def complete_gdrive_oauth(code):
     st.session_state.pop("oauth_flow", None)
 # ---------------------------------------------------
 
-# ===============  (ORIGINAL CODE FOLLOWS)  ==========
-#  (the ~2 500 lines live here; nothing else changed)
-#  Only the auto-upload hook was added in auto_approve_report
+# ===========  (ORIGINAL ~2 500-LINE CODE) ==========
+#  All original functions, classes, constants, etc.
+#  Only the auto_upload lines are added inside auto_approve_report()
 # ---------------------------------------------------
-#  Inside auto_approve_report(), after saving PDF/JSON:
+
+# --------------  AUTO-UPLOAD HOOK  -----------------
+#  Inside auto_approve_report()  (search for the PDF write line)
 """
+            HTML(string=report_data['html_content']).write_pdf(approved_pdf_path)
+
             # Google Drive auto-upload (principal only)
-            if st.session_state.user_role == "principal":
+            if st.session_state.get('user_role') == 'principal':
                 service = get_gdrive_service()
                 if service:
                     folder_id = ensure_gdrive_folder(service)
@@ -107,26 +111,49 @@ def complete_gdrive_oauth(code):
 """
 # ---------------------------------------------------
 
-# ===============  APP ENTRY-POINT  =================
-#  (the rest of your original login/main logic)
+# -------------  LOGIN / MAIN  ----------------------
+#  (your existing login_page() and main() stay unchanged)
 # ---------------------------------------------------
 
-# ---------------  LOGIN / MAIN  --------------------
-def main():
-    if 'authenticated' not in st.session_state:
-        st.session_state.authenticated = False
-    if 'teacher_id' not in st.session_state:
-        st.session_state.teacher_id = None
-
-    if not st.session_state.authenticated:
-        login_page()
-    else:
-        report_generator_page()
-
-if __name__ == "__main__":
-    main()
+# -------------  ADMIN PANEL GDRIVE TAB -------------
+#  Added inside the admin-panel tab loop
 # ---------------------------------------------------
+#  Inside admin_panel_tab()  (search for the tab list)
+admin_tabs = [
+    "📊 System Overview", "👥 User Management", "🔒 Security & 2FA",
+    "💾 Backup & Restore", "📊 System Stats", "📧 Email Setup",
+    "📞 Support Config", "🔍 Audit Logs", "📁 Google Drive Sync"
+]
 
-# -------------  ADMIN PANEL GOOGLE-DRIVE TAB --------
-# This block is inserted into the admin-panel tab list
-# (already merged above via the tab-for-loop)
+tabs = st.tabs(admin_tabs)
+
+for i, tab_name in enumerate(admin_tabs):
+    with tabs[i]:
+        if tab_name == "📁 Google Drive Sync":
+            if st.session_state.user_role != "principal":
+                st.warning("⚠️ Restricted to principal.")
+            else:
+                st.subheader("📁 Google Drive Sync (Principal Only)")
+                if not GDRIVE_AVAIL:
+                    st.error("pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib")
+                else:
+                    service = get_gdrive_service()
+                    if service is None:
+                        st.info("🔗 Connect Google Drive first")
+                        if st.button("Connect Google Drive"):
+                            initiate_gdrive_oauth()
+                        if st.session_state.get("oauth_code"):
+                            complete_gdrive_oauth(st.session_state.oauth_code)
+                            st.rerun()
+                    else:
+                        st.success("✅ Drive connected")
+                        if st.button("🔄 Manual Sync All Approved Reports"):
+                            folder_id = ensure_gdrive_folder(service)
+                            count = 0
+                            for root, _, files in os.walk("approved_reports"):
+                                for f in files:
+                                    local = os.path.join(root, f)
+                                    upload_to_gdrive(service, local, folder_id)
+                                    count += 1
+                            st.success(f"📤 Uploaded {count} files")
+        #  (existing elif blocks for other admin tabs stay here)
