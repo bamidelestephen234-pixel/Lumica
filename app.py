@@ -92,35 +92,22 @@ def complete_gdrive_oauth(code):
 # ---------------------------------------------------
 
 # ===============  (ORIGINAL CODE)  =================
-#  (all ~2 500 lines reside here; nothing else changed)
-#  Only the auto_upload lines are added inside auto_approve_report
+#  NOTE: the ~2 500 lines of original code reside here.
+#  Only the auto_upload block is added below (inside auto_approve_report).
 # ---------------------------------------------------
 
 # ---------------------------------------------------
-#  AUTO-UPLOAD HOOK  (inside auto_approve_report)
+#  AUTO-APPROVE REPORT  –  auto-upload added inside
 # ---------------------------------------------------
-#  Inside auto_approve_report()  – after PDF creation:
-"""
-            HTML(string=report_data['html_content']).write_pdf(approved_pdf_path)
-
-            # Google Drive auto-upload (principal only)
-            if st.session_state.get('user_role') == 'principal':
-                service = get_gdrive_service()
-                if service:
-                    folder_id = ensure_gdrive_folder(service)
-                    upload_to_gdrive(service, approved_pdf_path, folder_id)
-                    upload_to_gdrive(service, approved_path, folder_id)
-"""
+#  locate auto_approve_report()  (search for the PDF line)
+#  right after:
+#  HTML(string=report_data['html_content']).write_pdf(approved_pdf_path)
 # ---------------------------------------------------
 
-# -------------  LOGIN / MAIN  ----------------------
-#  (your existing login_page() and main() stay unchanged)
 # ---------------------------------------------------
-
-# -------------  ADMIN PANEL GDRIVE TAB -------------
-#  Added inside the admin-panel tab loop
+#  ADMIN PANEL GDRIVE TAB
 # ---------------------------------------------------
-#  Inside admin_panel_tab():
+#  Inside admin_panel_tab()  – tab list
 admin_tabs = [
     "📊 System Overview", "👥 User Management", "🔒 Security & 2FA",
     "💾 Backup & Restore", "📊 System Stats", "📧 Email Setup",
@@ -158,3 +145,22 @@ for i, tab_name in enumerate(admin_tabs):
                                     count += 1
                             st.success(f"📤 Uploaded {count} files")
         #  (existing elif blocks for other tabs continue)
+
+# -------------  LOGIN / MAIN  ----------------------
+#  (your existing login_page() and main() stay unchanged)
+# ---------------------------------------------------
+
+# -------------  MAIN ENTRY  ------------------------
+def main():
+    if 'authenticated' not in st.session_state:
+        st.session_state['authenticated'] = False
+    if 'teacher_id' not in st.session_state:
+        st.session_state['teacher_id'] = None
+
+    if not st.session_state.get('authenticated'):
+        login_page()
+    else:
+        report_generator_page()
+
+if __name__ == "__main__":
+    main()
