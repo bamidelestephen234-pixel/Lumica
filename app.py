@@ -6623,4 +6623,6 @@ class DatabaseManager:
 
 # Global database manager
 db_manager = DatabaseManager()
+self.db_url = os.getenv("DATABASE_URL")
+
 
