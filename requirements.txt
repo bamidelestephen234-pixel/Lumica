@@ -6,3 +6,5 @@ qrcode
 weasyprint
 plotly
 cryptography
+psycopg2-binary   
+python-dotenv      
