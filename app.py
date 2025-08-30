@@ -6508,33 +6508,52 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Database Manager
-# -------------------------
+"""
+AKIN'S SUNRISE SCHOOL REPORT CARD MANAGEMENT SYSTEM
+=====================================================
+
+Database Manager: PostgreSQL support for both local and cloud deployment
+"""
+
+import os
+import hashlib
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# Optional: only for local testing
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # loads .env locally
+except ImportError:
+    pass  # ignore in cloud
 
 class DatabaseManager:
     def __init__(self):
+        # Get the DATABASE_URL from environment variables
         self.db_url = os.getenv("DATABASE_URL")
         if not self.db_url:
-            raise ValueError("DATABASE_URL not found in environment variables.")
+            raise ValueError("DATABASE_URL not found. Set it in .env (local) or Streamlit Secrets (cloud).")
         self.init_database()
 
     def get_connection(self):
-        """Get PostgreSQL connection"""
+        """Get a PostgreSQL connection"""
         return psycopg2.connect(self.db_url, cursor_factory=RealDictCursor)
 
+    def hash_password(self, password: str) -> str:
+        """Return SHA-256 hash of a password"""
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
+        """Verify password against hash"""
+        return self.hash_password(plain_password) == hashed_password
+
     def init_database(self):
-        """Initialize tables in PostgreSQL"""
+        """Create tables and default users if they don't exist"""
         conn = self.get_connection()
         cursor = conn.cursor()
 
         # Users table
-        cursor.execute('''
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             full_name TEXT NOT NULL,
@@ -6546,10 +6565,10 @@ class DatabaseManager:
             created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             last_login TIMESTAMP
         );
-        ''')
+        """)
 
         # Students table
-        cursor.execute('''
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS students (
             id SERIAL PRIMARY KEY,
             admission_no TEXT UNIQUE NOT NULL,
@@ -6565,10 +6584,10 @@ class DatabaseManager:
             photo_path TEXT,
             created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        ''')
+        """)
 
         # Reports table
-        cursor.execute('''
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS reports (
             id TEXT PRIMARY KEY,
             student_id INTEGER REFERENCES students(id),
@@ -6580,10 +6599,10 @@ class DatabaseManager:
             final_grade TEXT,
             created_by TEXT
         );
-        ''')
+        """)
 
         # Subject scores table
-        cursor.execute('''
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS subject_scores (
             id SERIAL PRIMARY KEY,
             report_id TEXT REFERENCES reports(id),
@@ -6595,34 +6614,32 @@ class DatabaseManager:
             cumulative REAL,
             grade TEXT
         );
-        ''')
+        """)
 
         # Insert default users if not exists
         cursor.execute("SELECT COUNT(*) FROM users WHERE id='teacher_bamstep'")
         if cursor.fetchone()['count'] == 0:
-            cursor.execute('''
+            cursor.execute("""
             INSERT INTO users (id, full_name, email, password_hash, role) VALUES
             ('teacher_bamstep', 'Principal Bamstep', 'principal@akinssunrise.edu.ng', %s, 'principal'),
             ('teacher_bola', 'Teacher Bola', 'bola@akinssunrise.edu.ng', %s, 'class_teacher'),
             ('school_ict', 'Akins Sunrise', 'akinssunrise@gmail.com', %s, 'principal');
-            ''', (self.hash_password('admin789'), self.hash_password('secret123'), self.hash_password('akins1111')))
+            """, (
+                self.hash_password('admin789'),
+                self.hash_password('secret123'),
+                self.hash_password('akins1111')
+            ))
 
         conn.commit()
         cursor.close()
         conn.close()
 
-    def hash_password(self, password: str) -> str:
-        return hashlib.sha256(password.encode()).hexdigest()
-
-    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
-        return self.hash_password(plain_password) == hashed_password
-
     def get_session(self):
         """Get connection for queries"""
         return self.get_connection()
 
+
+# -------------------------
 # Global database manager
+# -------------------------
 db_manager = DatabaseManager()
-self.db_url = os.getenv("DATABASE_URL")
-
-
