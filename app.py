@@ -6508,4 +6508,119 @@ def main():
 if __name__ == "__main__":
     main()
 
+# Database Manager
+# -------------------------
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+class DatabaseManager:
+    def __init__(self):
+        self.db_url = os.getenv("DATABASE_URL")
+        if not self.db_url:
+            raise ValueError("DATABASE_URL not found in environment variables.")
+        self.init_database()
+
+    def get_connection(self):
+        """Get PostgreSQL connection"""
+        return psycopg2.connect(self.db_url, cursor_factory=RealDictCursor)
+
+    def init_database(self):
+        """Initialize tables in PostgreSQL"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Users table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            full_name TEXT NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT DEFAULT 'teacher',
+            phone TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP
+        );
+        ''')
+
+        # Students table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS students (
+            id SERIAL PRIMARY KEY,
+            admission_no TEXT UNIQUE NOT NULL,
+            student_name TEXT NOT NULL,
+            student_class TEXT NOT NULL,
+            parent_name TEXT,
+            parent_email TEXT NOT NULL,
+            parent_phone TEXT,
+            gender TEXT,
+            class_size INTEGER DEFAULT 35,
+            attendance_rate REAL DEFAULT 95.0,
+            position TEXT DEFAULT '1st',
+            photo_path TEXT,
+            created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        ''')
+
+        # Reports table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS reports (
+            id TEXT PRIMARY KEY,
+            student_id INTEGER REFERENCES students(id),
+            term TEXT NOT NULL,
+            created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT DEFAULT 'approved',
+            total_score REAL,
+            average_cumulative REAL,
+            final_grade TEXT,
+            created_by TEXT
+        );
+        ''')
+
+        # Subject scores table
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS subject_scores (
+            id SERIAL PRIMARY KEY,
+            report_id TEXT REFERENCES reports(id),
+            subject TEXT NOT NULL,
+            ca_score REAL,
+            exam_score REAL,
+            total_score REAL,
+            last_cumulative REAL,
+            cumulative REAL,
+            grade TEXT
+        );
+        ''')
+
+        # Insert default users if not exists
+        cursor.execute("SELECT COUNT(*) FROM users WHERE id='teacher_bamstep'")
+        if cursor.fetchone()['count'] == 0:
+            cursor.execute('''
+            INSERT INTO users (id, full_name, email, password_hash, role) VALUES
+            ('teacher_bamstep', 'Principal Bamstep', 'principal@akinssunrise.edu.ng', %s, 'principal'),
+            ('teacher_bola', 'Teacher Bola', 'bola@akinssunrise.edu.ng', %s, 'class_teacher'),
+            ('school_ict', 'Akins Sunrise', 'akinssunrise@gmail.com', %s, 'principal');
+            ''', (self.hash_password('admin789'), self.hash_password('secret123'), self.hash_password('akins1111')))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+    def hash_password(self, password: str) -> str:
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    def verify_password(self, plain_password: str, hashed_password: str) -> bool:
+        return self.hash_password(plain_password) == hashed_password
+
+    def get_session(self):
+        """Get connection for queries"""
+        return self.get_connection()
+
+# Global database manager
+db_manager = DatabaseManager()
 
