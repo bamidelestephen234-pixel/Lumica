@@ -6508,4 +6508,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-i want to split this cold into files mbecause it is too long i also want tp add a database
+
