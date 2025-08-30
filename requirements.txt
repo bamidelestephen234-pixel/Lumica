@@ -1,4 +1,3 @@
 streamlit
 pandas
 numpy
-sqlite3  # Built-in with Python
