@@ -4968,10 +4968,7 @@ def admin_panel_tab():
 
         # Parent registration section
 
-        target_date = datetime.date(2025, 9, 30)
-today = datetime.date.today()
-days_remaining = (target_date - today).days
-st.markdown(f"⏳ **{days_remaining} days remaining**")
+        
 
         with st.expander("📧 Parent Registration Portal", expanded=True):
             st.markdown("#### How Parents Can Register")
