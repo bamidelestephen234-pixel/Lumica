@@ -6508,13 +6508,6 @@ def main():
 if __name__ == "__main__":
     main()
 
-"""
-AKIN'S SUNRISE SCHOOL REPORT CARD MANAGEMENT SYSTEM
-=====================================================
-
-Database Manager: PostgreSQL support for both local and cloud deployment
-"""
-
 import os
 import hashlib
 import psycopg2
@@ -6531,8 +6524,11 @@ class DatabaseManager:
     def __init__(self):
         # Get the DATABASE_URL from environment variables
         self.db_url = os.getenv("DATABASE_URL")
+
         if not self.db_url:
-            raise ValueError("DATABASE_URL not found. Set it in .env (local) or Streamlit Secrets (cloud).")
+            print("⚠️ DATABASE_URL not found. Falling back to SQLite.")
+            self.db_url = "sqlite:///local_database.db"  # Adjust path if needed
+
         self.init_database()
 
     def get_connection(self):
@@ -6637,7 +6633,6 @@ class DatabaseManager:
     def get_session(self):
         """Get connection for queries"""
         return self.get_connection()
-
 
 # -------------------------
 # Global database manager
