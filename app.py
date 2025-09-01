@@ -6,10 +6,7 @@ AKIN'S SUNRISE SCHOOL REPORT CARD MANAGEMENT SYSTEM
 School Management System - Report Card Generator
 Author: School Administration
 """
-target_date = datetime.date(2025, 9, 30)
-today = datetime.date.today()
-days_remaining = (target_date - today).days
-st.markdown(f"⏳ **{days_remaining} days remaining**")
+
 
 import streamlit as st
 import pandas as pd
@@ -4970,6 +4967,12 @@ def admin_panel_tab():
         st.markdown("### 👨‍👩‍👧‍👦 Parent Registration System")
 
         # Parent registration section
+
+        target_date = datetime.date(2025, 9, 30)
+today = datetime.date.today()
+days_remaining = (target_date - today).days
+st.markdown(f"⏳ **{days_remaining} days remaining**")
+
         with st.expander("📧 Parent Registration Portal", expanded=True):
             st.markdown("#### How Parents Can Register")
             st.markdown("""
