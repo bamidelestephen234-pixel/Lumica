@@ -1751,6 +1751,31 @@ def generate_activation_key(school_name=None, subscription_type="monthly", expir
     session.close()
 
     return formatted_key
+def activate_system(activation_key, subscription_type="monthly"):
+    """Activate the system with provided key from Supabase"""
+    from database.models import ActivationKey
+    from database.db_manager import SessionLocal
+
+    session = SessionLocal()
+    key = session.query(ActivationKey).filter_by(key_value=activation_key).first()
+
+    if not key:
+        session.close()
+        return False
+    if not key.is_active:
+        session.close()
+        return False
+    if key.expires_at and key.expires_at < datetime.utcnow():
+        session.close()
+        return False
+
+    # Mark as active (optional: could also store 'last_activated_at')
+    key.is_active = True
+    session.commit()
+    session.close()
+
+    return True
+    
 
 
 def activate_system(activation_key, subscription_type="monthly"):
