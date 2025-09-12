@@ -9,7 +9,7 @@ from models import Base
 # 1. Get database URL from environment/secrets
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    sys.exit("❌ DATABASE_URL not set. Please add it to your secrets.")
+    sys.exit("❌ DATABASE_URL not set. Please add it to your Streamlit secrets.")
 
 # 2. Create SQLAlchemy engine
 try:
