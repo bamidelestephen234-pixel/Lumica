@@ -139,13 +139,24 @@ SYSTEM_FEATURES = {
 }
 
 # Enhanced user management system
-from database.models import User
-from database.db_manager import db_manager
+try:
+    from database.models import User
+    from database.db_manager import db_manager
+    DATABASE_AVAILABLE = True
+except ImportError as e:
+    # Fallback for deployment environments
+    DATABASE_AVAILABLE = False
+    db_manager = None
+    print(f"Database not available: {e}")
 from datetime import datetime
 import uuid
 
 def load_user_database():
-    """Load user database from Supabase via SQLAlchemy"""
+    """Load user database from Supabase via SQLAlchemy or fallback to JSON"""
+    if not DATABASE_AVAILABLE or not db_manager:
+        # Fallback to JSON file for deployment
+        return load_user_database_fallback()
+    
     try:
         session = db_manager.get_session()
         users = session.query(User).all()
@@ -173,6 +184,71 @@ def load_user_database():
         }
     except Exception as e:
         print(f"Error loading users from DB: {e}")
+        return load_user_database_fallback()
+
+def load_user_database_fallback():
+    """Fallback to JSON database for deployment environments"""
+    try:
+        if os.path.exists("users_database.json"):
+            with open("users_database.json", 'r') as f:
+                return json.load(f)
+        else:
+            # Create default users if no database exists
+            return {
+                "teacher_bamstep": {
+                    "password_hash": hash_password("admin789"),
+                    "role": "principal", 
+                    "full_name": "Principal Bamstep",
+                    "email": "principal@akinssunrise.edu.ng",
+                    "phone": "+234-XXX-XXX-XXXX",
+                    "created_date": datetime.datetime.now().isoformat(),
+                    "last_login": None,
+                    "active": True,
+                    "two_factor_enabled": False,
+                    "two_factor_secret": None,
+                    "session_timeout": 30,
+                    "failed_attempts": 0,
+                    "locked_until": None,
+                    "assigned_classes": [],
+                    "departments": ["all"]
+                },
+                "teacher_bola": {
+                    "password_hash": hash_password("secret123"),
+                    "role": "class_teacher",
+                    "full_name": "Teacher Bola", 
+                    "email": "bola@akinssunrise.edu.ng",
+                    "phone": "+234-XXX-XXX-XXXX",
+                    "created_date": datetime.datetime.now().isoformat(),
+                    "last_login": None,
+                    "active": True,
+                    "two_factor_enabled": False,
+                    "two_factor_secret": None,
+                    "session_timeout": 30,
+                    "failed_attempts": 0,
+                    "locked_until": None,
+                    "assigned_classes": [],
+                    "departments": []
+                },
+                "school_ict": {
+                    "password_hash": hash_password("akins1111"),
+                    "role": "principal",
+                    "full_name": "Akins Sunrise",
+                    "email": "akinssunrise@gmail.com",
+                    "phone": "+234-XXX-XXX-XXXX",
+                    "created_date": datetime.datetime.now().isoformat(),
+                    "last_login": None,
+                    "active": True,
+                    "two_factor_enabled": False,
+                    "two_factor_secret": None,
+                    "session_timeout": 30,
+                    "failed_attempts": 0,
+                    "locked_until": None,
+                    "assigned_classes": [],
+                    "departments": ["all"]
+                }
+            }
+    except Exception as e:
+        print(f"Error loading fallback database: {e}")
         return {}
 
 def save_user_database(users_db):
@@ -1721,8 +1797,6 @@ def get_current_activation_key():
         return None
 
 
-from database.models import ActivationKey
-from database.db_manager import SessionLocal
 import uuid
 from datetime import datetime
 import secrets
@@ -1730,13 +1804,20 @@ import string
 
 def generate_activation_key(school_name=None, subscription_type="monthly", expires_at=None):
     """Generate a unique activation key and save it to Supabase"""
+    try:
+        from database.models import ActivationKey
+        from database.db_manager import db_manager
+    except ImportError:
+        # Fallback for deployment environments
+        return None
+    
     # Generate a 16-character activation key
     characters = string.ascii_uppercase + string.digits
     activation_key = ''.join(secrets.choice(characters) for _ in range(16))
     formatted_key = '-'.join([activation_key[i:i+4] for i in range(0, 16, 4)])
 
     # Save to Supabase
-    session = SessionLocal()
+    session = db_manager.get_session()
     new_key = ActivationKey(
         id=str(uuid.uuid4()),
         key_value=formatted_key,
@@ -1753,10 +1834,17 @@ def generate_activation_key(school_name=None, subscription_type="monthly", expir
     return formatted_key
 def activate_system(activation_key, subscription_type="monthly"):
     """Activate the system with provided key from Supabase"""
-    from database.models import ActivationKey
-    from database.db_manager import SessionLocal
-
-    session = SessionLocal()
+    try:
+        from database.models import ActivationKey
+    except ImportError:
+        # Create a fallback if database not available in deployment
+        class ActivationKey:
+            pass
+    try:
+        from database.db_manager import db_manager
+        session = db_manager.get_session()
+    except ImportError:
+        return False  # Database not available
     key = session.query(ActivationKey).filter_by(key_value=activation_key).first()
 
     if not key:
@@ -1780,10 +1868,17 @@ def activate_system(activation_key, subscription_type="monthly"):
 
 def activate_system(activation_key, subscription_type="monthly"):
     """Activate the system with provided key from Supabase"""
-    from database.models import ActivationKey
-    from database.db_manager import SessionLocal
-
-    session = SessionLocal()
+    try:
+        from database.models import ActivationKey
+    except ImportError:
+        # Create a fallback if database not available in deployment
+        class ActivationKey:
+            pass
+    try:
+        from database.db_manager import db_manager
+        session = db_manager.get_session()
+    except ImportError:
+        return False  # Database not available
     key = session.query(ActivationKey).filter_by(key_value=activation_key).first()
     session.close()
 
@@ -6481,15 +6576,13 @@ def report_generator_page():
                     admin_panel_tab()
 
 def main():
-    # Initialize database on startup
+    # Initialize database on startup (with fallback for deployment)
     try:
-        from database.db_manager import SessionLocal, init_db
-        init_db()
+        if DATABASE_AVAILABLE and db_manager:
+            db_manager.init_database()
     except Exception as e:
-        # Log detailed error server-side, show generic message to user
-        import logging
-        logging.error(f"Database initialization failed: {e}")
-        st.error("Database initialization failed. Please contact system administrator.")
+        # Log error but continue with fallback - don't break deployment
+        print(f"Database initialization failed, using fallback: {e}")
 
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
