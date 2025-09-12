@@ -6503,7 +6503,7 @@ def main():
     # Initialize database on startup
     try:
         from database.db_manager import SessionLocal, init_db
-        db_manager.init_database()
+        init_db()
     except Exception as e:
         # Log detailed error server-side, show generic message to user
         import logging
