@@ -1775,7 +1775,7 @@ def activate_system(activation_key, subscription_type="monthly"):
     session.close()
 
     return True
-    
+
 
 
 def activate_system(activation_key, subscription_type="monthly"):
@@ -4996,7 +4996,7 @@ def admin_panel_tab():
 
         # Parent registration section
 
-        
+
 
         with st.expander("📧 Parent Registration Portal", expanded=True):
             st.markdown("#### How Parents Can Register")
@@ -6504,7 +6504,7 @@ def report_generator_page():
             with tabs[i]:
                 if tab_key == "reports":
                     report_generator_tab()
-                    
+
                 elif tab_key == "drafts":
                     draft_reports_tab()
                 elif tab_key == "database":
@@ -6526,7 +6526,7 @@ def main():
         import logging
         logging.error(f"Database initialization failed: {e}")
         st.error("Database initialization failed. Please contact system administrator.")
-    
+
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
     if 'teacher_id' not in st.session_state:
