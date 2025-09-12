@@ -140,14 +140,14 @@ SYSTEM_FEATURES = {
 
 # Enhanced user management system
 from database.models import User
-from database.db_manager import SessionLocal
+from database.db_manager import db_manager
 from datetime import datetime
 import uuid
 
 def load_user_database():
     """Load user database from Supabase via SQLAlchemy"""
     try:
-        session = SessionLocal()
+        session = db_manager.get_session()
         users = session.query(User).all()
         session.close()
         # Return in the same dict format your app expects
@@ -181,7 +181,7 @@ def save_user_database(users_db):
     Expects users_db to be a dict keyed by user_id with user details.
     """
     try:
-        session = SessionLocal()
+        session = db_manager.get_session()
         for user_id, data in users_db.items():
             # Check if user exists
             existing = session.query(User).filter_by(id=user_id).first()
@@ -1710,7 +1710,7 @@ def is_activation_key_deactivated(activation_key):
 def get_current_activation_key():
     """Get the currently active activation key from Supabase"""
     try:
-        session = SessionLocal()
+        session = db_manager.get_session()
         key = session.query(ActivationKey).filter_by(is_active=True).first()
         session.close()
         if key:
@@ -1810,42 +1810,6 @@ def activate_system(activation_key, subscription_type="monthly"):
         json.dump(activation_data, f, indent=2)
 
     return True
-
-
-        # Enhanced persistence with multiple write attempts
-        for attempt in range(3):
-            try:
-                with open("activation_status.json", 'w') as f:
-                    json.dump(activation_data, f, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
-
-                # Verify the file was written correctly
-                with open("activation_status.json", 'r') as f:
-                    test_data = json.load(f)
-                    if test_data.get('activated', False) and test_data.get('activation_key') == activation_key:
-                        break
-            except Exception as e:
-                if attempt == 2:  # Last attempt
-                    print(f"Final activation write attempt failed: {e}")
-                    return False
-                continue
-
-        # Create backup activation files for extra persistence
-        backup_files = ["activation_backup.json", "system_status.json"]
-        for backup_file in backup_files:
-            try:
-                with open(backup_file, 'w') as f:
-                    json.dump(activation_data, f, indent=2)
-                    f.flush()
-                    os.fsync(f.fileno())
-            except:
-                continue
-
-        return True
-    except Exception as e:
-        print(f"Activation error: {e}")
-        return False
 
 def get_payment_instructions():
     """Get payment instructions for activation"""
