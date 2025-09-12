@@ -2783,7 +2783,7 @@ def show_activation_required_page():
                     "activation_key": activation_key,
                     "school_name": school_name,
                     "subscription_type": subscription_type,
-                    "generated_date": datetime.datetime.now().isoformat(),
+                    "generated_date": datetime.now().isoformat(),
                     "generated_by": "teacher_bamstep",
                     "amount": config.get(f'{subscription_type}_amount', 20000),
                     "status": "generated"
