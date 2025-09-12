@@ -8,3 +8,4 @@ plotly
 cryptography
 psycopg2-binary   
 python-dotenv      
+sqlalchemy>=2.0
