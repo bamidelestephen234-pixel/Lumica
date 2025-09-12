@@ -70,3 +70,15 @@ class VerificationCode(Base):
     expires_at = Column(DateTime, nullable=True)  # For time-sensitive codes
     extra_data = Column(Text, nullable=True)  # JSON string for additional data
     user = relationship("User")
+class ActivationKey(Base):
+    __tablename__ = "activation_keys"
+
+    id = Column(String, primary_key=True)
+    key_value = Column(String, unique=True, nullable=False)
+    school_name = Column(String)
+    subscription_type = Column(String)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    deactivated_by = Column(String, nullable=True)
+
