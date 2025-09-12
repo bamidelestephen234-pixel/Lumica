@@ -33,16 +33,22 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 
-# Database imports (deployment-ready with fallbacks)
-try:
-    from database.models import ActivationKey
-    from database.db_manager import db_manager
-    DATABASE_AVAILABLE = True
-except ImportError as e:
-    # Fallback for deployment environments
-    DATABASE_AVAILABLE = False
-    db_manager = None
-    print(f"Database not available: {e}")
+# Database imports
+from database.db_manager import SessionLocal
+from database.models import ActivationKey
+
+# Import activation functions (must be defined in another file or above this block)
+from your_module_name import get_current_activation_key, generate_activation_key
+# Replace 'your_module_name' with the actual file name if these functions are not in app.py
+
+# --- Auto-generate activation key if none exists ---
+if not get_current_activation_key():
+    new_key = generate_activation_key(
+        school_name="Akin's Sunrise School",
+        subscription_type="premium",
+        expires_at=datetime(2025, 12, 31)
+    )
+    print(f"Generated new activation key: {new_key}")
 
 # Google Drive integration
 try:
@@ -80,11 +86,10 @@ USER_ROLES = {
         "level": 5,
         "permissions": ["all_access", "user_management", "system_config", "backup_restore", "data_export"],
         "description": "Principal - Full system access",
-        "default_features": [
-            "report_generation", "draft_management", "student_database", 
-            "analytics_dashboard", "verification_system", "admin_panel"
-        ]
-    },
+        "default_features": []
+    }
+},
+
     "head_of_department": {
         "level": 4,
         "permissions": ["department_reports", "teacher_management", "grade_boundaries", "class_management"],
