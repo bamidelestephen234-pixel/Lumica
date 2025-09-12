@@ -1705,95 +1705,87 @@ def is_activation_key_deactivated(activation_key):
     except Exception:
         return False
 
+
+
 def get_current_activation_key():
-    """Get the currently active activation key"""
+    """Get the currently active activation key from Supabase"""
     try:
-        if os.path.exists("activation_status.json"):
-            with open("activation_status.json", 'r') as f:
-                status = json.load(f)
-                return status.get('activation_key')
+        session = SessionLocal()
+        key = session.query(ActivationKey).filter_by(is_active=True).first()
+        session.close()
+        if key:
+            return key.key_value
         return None
-    except Exception:
+    except Exception as e:
+        print(f"Error fetching activation key: {e}")
         return None
 
-def generate_activation_key():
-    """Generate a unique activation key"""
-    import secrets
-    import string
 
+from database.models import ActivationKey
+from database.db_manager import SessionLocal
+import uuid
+from datetime import datetime
+import secrets
+import string
+
+def generate_activation_key(school_name=None, subscription_type="monthly", expires_at=None):
+    """Generate a unique activation key and save it to Supabase"""
     # Generate a 16-character activation key
     characters = string.ascii_uppercase + string.digits
     activation_key = ''.join(secrets.choice(characters) for _ in range(16))
-
-    # Format as XXXX-XXXX-XXXX-XXXX
     formatted_key = '-'.join([activation_key[i:i+4] for i in range(0, 16, 4)])
+
+    # Save to Supabase
+    session = SessionLocal()
+    new_key = ActivationKey(
+        id=str(uuid.uuid4()),
+        key_value=formatted_key,
+        school_name=school_name,
+        subscription_type=subscription_type,
+        is_active=True,
+        created_at=datetime.utcnow(),
+        expires_at=expires_at
+    )
+    session.add(new_key)
+    session.commit()
+    session.close()
+
     return formatted_key
 
+
 def activate_system(activation_key, subscription_type="monthly"):
-    """Activate the system with provided key"""
-    try:
-        # Check if key format is valid
-        if len(activation_key.replace('-', '')) != 16:
-            return False
+    """Activate the system with provided key from Supabase"""
+    from database.models import ActivationKey
+    from database.db_manager import SessionLocal
 
-        # Check if activation key exists and is not deactivated
-        key_found = False
-        key_deactivated = False
-        key_subscription_type = subscription_type
+    session = SessionLocal()
+    key = session.query(ActivationKey).filter_by(key_value=activation_key).first()
+    session.close()
 
-        if os.path.exists("activation_records.json"):
-            try:
-                with open("activation_records.json", 'r') as f:
-                    records = json.load(f)
+    if not key:
+        return False  # Key doesn't exist
+    if not key.is_active:
+        return False  # Key deactivated
+    if key.expires_at and key.expires_at < datetime.utcnow():
+        return False  # Key expired
 
-                # Find the key in records
-                for record in records:
-                    if record.get('activation_key') == activation_key:
-                        key_found = True
-                        if record.get('status', 'generated') == 'deactivated':
-                            key_deactivated = True
-                        else:
-                            key_subscription_type = record.get('subscription_type', 'monthly')
-                        break
+    activation_data = {
+        "activated": True,
+        "activation_date": datetime.utcnow().isoformat(),
+        "activation_key": activation_key,
+        "subscription_type": key.subscription_type or subscription_type,
+        "activated_by": "system",
+        "activation_method": "key_input",
+        "persistent": True,
+        "restart_safe": True
+    }
 
-                if not key_found:
-                    return False  # Key doesn't exist in records
+    # Save activation status locally so app knows it's activated
+    with open("activation_status.json", 'w') as f:
+        json.dump(activation_data, f, indent=2)
 
-                if key_deactivated:
-                    return False  # Key has been deactivated
+    return True
 
-            except:
-                # If we can't read records, allow basic validation to continue
-                key_found = True
-
-        # If no records file exists, accept any properly formatted key
-        if not os.path.exists("activation_records.json"):
-            key_found = True
-
-        if not key_found:
-            return False
-
-        # Check if system is already activated to preserve original activation date
-        existing_activation_date = None
-        if os.path.exists("activation_status.json"):
-            try:
-                with open("activation_status.json", 'r') as f:
-                    existing_status = json.load(f)
-                    if existing_status.get('activated', False):
-                        existing_activation_date = existing_status.get('activation_date')
-            except:
-                pass
-
-        activation_data = {
-            "activated": True,
-            "activation_date": existing_activation_date or datetime.datetime.now().isoformat(),
-            "activation_key": activation_key,
-            "subscription_type": key_subscription_type,
-            "activated_by": "system",
-            "activation_method": "key_input",
-            "persistent": True,
-            "restart_safe": True
-        }
 
         # Enhanced persistence with multiple write attempts
         for attempt in range(3):
