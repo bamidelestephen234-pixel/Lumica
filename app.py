@@ -33,22 +33,16 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 
-# Database imports
-from database.db_manager import SessionLocal
-from database.models import ActivationKey
-
-# Import activation functions (must be defined in another file or above this block)
-from your_module_name import get_current_activation_key, generate_activation_key
-# Replace 'your_module_name' with the actual file name if these functions are not in app.py
-
-# --- Auto-generate activation key if none exists ---
-if not get_current_activation_key():
-    new_key = generate_activation_key(
-        school_name="Akin's Sunrise School",
-        subscription_type="premium",
-        expires_at=datetime(2025, 12, 31)
-    )
-    print(f"Generated new activation key: {new_key}")
+# Database imports (deployment-ready with fallbacks)
+try:
+    from database.models import ActivationKey
+    from database.db_manager import db_manager
+    DATABASE_AVAILABLE = True
+except ImportError as e:
+    # Fallback for deployment environments
+    DATABASE_AVAILABLE = False
+    db_manager = None
+    print(f"Database not available: {e}")
 
 # Google Drive integration
 try:
@@ -86,10 +80,11 @@ USER_ROLES = {
         "level": 5,
         "permissions": ["all_access", "user_management", "system_config", "backup_restore", "data_export"],
         "description": "Principal - Full system access",
-        "default_features": []
-    }
-}
-
+        "default_features": [
+            "report_generation", "draft_management", "student_database", 
+            "analytics_dashboard", "verification_system", "admin_panel"
+        ]
+    },
     "head_of_department": {
         "level": 4,
         "permissions": ["department_reports", "teacher_management", "grade_boundaries", "class_management"],
@@ -220,7 +215,7 @@ def load_user_database_fallback():
                     "full_name": "Principal Bamstep",
                     "email": "principal@akinssunrise.edu.ng",
                     "phone": "+234-XXX-XXX-XXXX",
-                    "created_date": datetime.datetime.now().isoformat(),
+                    "created_date": datetime.now().isoformat(),
                     "last_login": None,
                     "active": True,
                     "two_factor_enabled": False,
@@ -237,7 +232,7 @@ def load_user_database_fallback():
                     "full_name": "Teacher Bola", 
                     "email": "bola@akinssunrise.edu.ng",
                     "phone": "+234-XXX-XXX-XXXX",
-                    "created_date": datetime.datetime.now().isoformat(),
+                    "created_date": datetime.now().isoformat(),
                     "last_login": None,
                     "active": True,
                     "two_factor_enabled": False,
@@ -254,7 +249,7 @@ def load_user_database_fallback():
                     "full_name": "Akins Sunrise",
                     "email": "akinssunrise@gmail.com",
                     "phone": "+234-XXX-XXX-XXXX",
-                    "created_date": datetime.datetime.now().isoformat(),
+                    "created_date": datetime.now().isoformat(),
                     "last_login": None,
                     "active": True,
                     "two_factor_enabled": False,
@@ -371,8 +366,8 @@ def is_user_locked(user_id):
         locked_until = user.get('locked_until')
 
         if locked_until:
-            lock_time = datetime.datetime.fromisoformat(locked_until)
-            if datetime.datetime.now() > lock_time:
+            lock_time = datetime.fromisoformat(locked_until)
+            if datetime.now() > lock_time:
                 # Unlock user
                 users_db[user_id]['locked_until'] = None
                 users_db[user_id]['failed_attempts'] = 0
@@ -394,7 +389,7 @@ def increment_failed_attempts(user_id):
 
         # Lock account after 3 failed attempts
         if users_db[user_id]['failed_attempts'] >= 3:
-            lock_time = datetime.datetime.now() + datetime.timedelta(minutes=30)
+            lock_time = datetime.now() + datetime.timedelta(minutes=30)
             users_db[user_id]['locked_until'] = lock_time.isoformat()
 
         save_user_database(users_db)
@@ -408,7 +403,7 @@ def reset_failed_attempts(user_id):
         if user_id in users_db:
             users_db[user_id]['failed_attempts'] = 0
             users_db[user_id]['locked_until'] = None
-            users_db[user_id]['last_login'] = datetime.datetime.now().isoformat()
+            users_db[user_id]['last_login'] = datetime.now().isoformat()
             save_user_database(users_db)
     except Exception as e:
         pass
@@ -447,7 +442,7 @@ def create_backup():
         backup_dir = "backups"
         os.makedirs(backup_dir, exist_ok=True)
 
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_name = f"school_backup_{timestamp}"
         backup_path = os.path.join(backup_dir, backup_name)
 
@@ -474,7 +469,7 @@ def create_backup():
         ]
 
         backup_info = {
-            "timestamp": datetime.datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "created_by": st.session_state.get('teacher_id', 'system'),
             "backup_type": "full_system",
             "included_dirs": dirs_to_backup,
@@ -518,7 +513,7 @@ def get_available_backups():
                 backups.append({
                     'name': file,
                     'size': stat.st_size,
-                    'created': datetime.datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    'created': datetime.fromtimestamp(stat.st_mtime).isoformat(),
                     'path': file_path
                 })
 
@@ -576,7 +571,7 @@ def export_student_data(student_id=None, gdpr_compliant=True):
             return None, "No student data found"
 
         export_data = {
-            "export_timestamp": datetime.datetime.now().isoformat(),
+            "export_timestamp": datetime.now().isoformat(),
             "export_type": "gdpr_compliant" if gdpr_compliant else "standard",
             "exported_by": st.session_state.get('teacher_id', 'system'),
             "students": []
@@ -683,18 +678,18 @@ def create_audit_log(action: str, user_id: str, details: dict, data_type: str = 
         os.makedirs(audit_dir, exist_ok=True)
 
         audit_entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "action": action,
             "user_id": user_id,
             "data_type": data_type,
             "details": details,
             "ip_address": "replit_session",
-            "session_id": hashlib.md5(f"{user_id}_{datetime.datetime.now().isoformat()}".encode()).hexdigest()[:16],
+            "session_id": hashlib.md5(f"{user_id}_{datetime.now().isoformat()}".encode()).hexdigest()[:16],
             "compliance_level": "high",
             "retention_period": "7_years"
         }
 
-        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now().strftime("%Y-%m-%d")
         audit_file = os.path.join(audit_dir, f"audit_{date_str}.json")
 
         if os.path.exists(audit_file):
@@ -764,12 +759,12 @@ def save_student_data(student_name, student_class, parent_name, parent_email, pa
             "parent_email": encrypt_data(parent_email, encryption_key),
             "parent_phone": encrypt_data(parent_phone, encryption_key),
             "gender": gender if gender else "",
-            "admission_no": admission_no or f"ASS/{str(datetime.datetime.now().year)[-2:]}/{len(get_all_students()) + 1:03d}",
+            "admission_no": admission_no or f"ASS/{str(datetime.now().year)[-2:]}/{len(get_all_students()) + 1:03d}",
             "class_size": class_size or "35",
             "attendance": attendance or "95%",
             "position": position or "1st",
-            "created_date": datetime.datetime.now().isoformat(),
-            "last_updated": datetime.datetime.now().isoformat(),
+            "created_date": datetime.now().isoformat(),
+            "last_updated": datetime.now().isoformat(),
             "created_by": st.session_state.get('teacher_id', 'unknown'),
             "data_encrypted": True,
             "compliance_level": "gdpr_compliant"
@@ -1002,7 +997,7 @@ def generate_class_reports(student_class, term, subject_scores_dict):
                         "term": term,
                         "parent_email": student['parent_email'],
                         "teacher_id": st.session_state.teacher_id,
-                        "created_date": datetime.datetime.now().isoformat(),
+                        "created_date": datetime.now().isoformat(),
                         "status": "pending_review",
                         "scores_data": scores_data,
                         "average_cumulative": float(average_cumulative),
@@ -1153,7 +1148,7 @@ def save_draft_report(report_data):
                 pass
 
         # Update timestamp
-        report_data['last_modified'] = datetime.datetime.now().isoformat()
+        report_data['last_modified'] = datetime.now().isoformat()
 
         # If existing data, preserve creation date
         if existing_data:
@@ -1287,12 +1282,12 @@ def auto_approve_report(report_data):
         os.makedirs(approved_dir, exist_ok=True)
 
         report_data['status'] = 'approved'
-        report_data['approved_date'] = datetime.datetime.now().isoformat()
+        report_data['approved_date'] = datetime.now().isoformat()
         report_data['approved_by'] = 'auto_system'
 
         # Add persistence markers
         report_data['persistent'] = True
-        report_data['backup_created'] = datetime.datetime.now().isoformat()
+        report_data['backup_created'] = datetime.now().isoformat()
 
         approved_path = os.path.join(approved_dir, f"approved_{report_data['report_id']}.json")
 
@@ -1357,7 +1352,7 @@ def reject_report(report_id, reason=""):
         os.makedirs(rejected_dir, exist_ok=True)
 
         report_data['status'] = 'rejected'
-        report_data['rejected_date'] = datetime.datetime.now().isoformat()
+        report_data['rejected_date'] = datetime.now().isoformat()
         report_data['rejected_by'] = st.session_state.get('teacher_id', 'admin')
         report_data['rejection_reason'] = reason
 
@@ -1602,8 +1597,8 @@ def check_premium_subscription(parent_email):
                     expiry_date = subscription.get('expiry_date', '')
                     if expiry_date:
                         try:
-                            expiry = datetime.datetime.fromisoformat(expiry_date)
-                            return datetime.datetime.now() < expiry
+                            expiry = datetime.fromisoformat(expiry_date)
+                            return datetime.now() < expiry
                         except:
                             return True  # If date parsing fails, assume active
                     return True  # If no expiry date, assume active
@@ -1624,7 +1619,7 @@ def add_premium_subscription(parent_email, plan_type="monthly"):
                 subscriptions = {}
 
         # Calculate expiry based on plan type
-        now = datetime.datetime.now()
+        now = datetime.now()
         if plan_type == "monthly":
             expiry = now + datetime.timedelta(days=30)
         elif plan_type == "yearly":
@@ -1751,7 +1746,7 @@ def check_activation_status():
                 if status.get('activated', False):
                     activation_date = status.get('activation_date')
                     if activation_date:
-                        activation_dt = datetime.datetime.fromisoformat(activation_date)
+                        activation_dt = datetime.fromisoformat(activation_date)
 
                         # Check if subscription is still valid
                         if status.get('subscription_type') == 'monthly':
@@ -1764,7 +1759,7 @@ def check_activation_status():
                         grace_period = config.get('grace_period_days', 7)
                         grace_expiry = expiry + datetime.timedelta(days=grace_period)
 
-                        if datetime.datetime.now() <= grace_expiry:
+                        if datetime.now() <= grace_expiry:
                             return True, status, expiry
                         else:
                             return False, status, expiry
@@ -1775,10 +1770,10 @@ def check_activation_status():
         # Use creation date of users_database.json as trial start
         if os.path.exists("users_database.json"):
             stat = os.stat("users_database.json")
-            creation_time = datetime.datetime.fromtimestamp(stat.st_ctime)
+            creation_time = datetime.fromtimestamp(stat.st_ctime)
             trial_expiry = creation_time + datetime.timedelta(days=trial_days)
 
-            if datetime.datetime.now() <= trial_expiry:
+            if datetime.now() <= trial_expiry:
                 return True, {"status": "trial", "trial_expiry": trial_expiry.isoformat()}, trial_expiry
 
         return False, {}, None
@@ -1838,12 +1833,9 @@ def generate_activation_key(school_name=None, subscription_type="monthly", expir
     # Save to Supabase
     session = db_manager.get_session()
     new_key = ActivationKey(
-        id=str(uuid.uuid4()),
         key_value=formatted_key,
-        school_name=school_name,
         subscription_type=subscription_type,
         is_active=True,
-        created_at=datetime.utcnow(),
         expires_at=expires_at
     )
     session.add(new_key)
@@ -1984,8 +1976,8 @@ def send_report_email(parent_email, student_name, student_class, term, report_pd
         )
 
         # Format body with placeholders
-        current_date = datetime.datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
-        session_year = school_config.get('current_session', f"{datetime.datetime.now().year}/{datetime.datetime.now().year + 1}")
+        current_date = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+        session_year = school_config.get('current_session', f"{datetime.now().year}/{datetime.now().year + 1}")
         school_phone = school_config.get('school_phone', "+234 800 123 4567")
         school_email_address = school_config.get('school_email', "info@akinssunrise.edu.ng")
 
@@ -2040,13 +2032,13 @@ def log_teacher_activity(teacher_id, activity_type, details):
             os.makedirs(logs_dir)
 
         log_entry = {
-            "timestamp": datetime.datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat(),
             "teacher_id": teacher_id,
             "activity": activity_type,
             "details": details
         }
 
-        date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now().strftime("%Y-%m-%d")
         log_file = os.path.join(logs_dir, f"activity_{date_str}.json")
 
         if os.path.exists(log_file):
@@ -2065,7 +2057,7 @@ def log_teacher_activity(teacher_id, activity_type, details):
 
 def render_html_report(student_name, student_class, term, report_df, term_total, cumulative, final_grade, logo_base64, student_data=None, report_details=None, report_id=None):
     # Use Nigeria timezone (WAT = UTC+1)
-    nigeria_time = datetime.datetime.now() + datetime.timedelta(hours=1)
+    nigeria_time = datetime.now() + datetime.timedelta(hours=1)
     date_now = nigeria_time.strftime("%A, %B %d, %Y, %I:%M %p WAT")
     if report_id is None:
         report_id = generate_report_id()
@@ -2658,22 +2650,22 @@ def apply_custom_css():
 def check_session_timeout():
     """Check if user session has timed out"""
     if 'last_activity' not in st.session_state:
-        st.session_state.last_activity = datetime.datetime.now()
+        st.session_state.last_activity = datetime.now()
         return False
 
     if 'session_timeout' not in st.session_state:
         st.session_state.session_timeout = 30  # Default 30 minutes
 
-    time_diff = datetime.datetime.now() - st.session_state.last_activity
+    time_diff = datetime.now() - st.session_state.last_activity
     if time_diff.seconds > (st.session_state.session_timeout * 60):
         return True
 
-    st.session_state.last_activity = datetime.datetime.now()
+    st.session_state.last_activity = datetime.now()
     return False
 
 def update_session_activity():
     """Update last activity time"""
-    st.session_state.last_activity = datetime.datetime.now()
+    st.session_state.last_activity = datetime.now()
 
 def login_page():
     st.set_page_config(
@@ -2725,15 +2717,15 @@ def login_page():
     # Show activation status if activated
     if is_activated:
         if activation_status.get('status') == 'trial':
-            trial_expiry = datetime.datetime.fromisoformat(activation_status['trial_expiry'])
-            days_left = (trial_expiry - datetime.datetime.now()).days
+            trial_expiry = datetime.fromisoformat(activation_status['trial_expiry'])
+            days_left = (trial_expiry - datetime.now()).days
             if days_left > 0:
                 st.info(f"🆓 Trial Period: {days_left} days remaining")
             else:
                 st.warning("🕐 Trial period expired - Grace period active")
         else:
             if expiry_date:
-                days_until_expiry = (expiry_date - datetime.datetime.now()).days
+                days_until_expiry = (expiry_date - datetime.now()).days
                 if days_until_expiry > 7:
                     st.success(f"✅ System Activated - {days_until_expiry} days remaining")
                 elif days_until_expiry > 0:
@@ -2946,7 +2938,7 @@ def show_activation_required_page():
                                 generated_date = record.get('generated_date', '')
                                 if generated_date:
                                     try:
-                                        date_obj = datetime.datetime.fromisoformat(generated_date)
+                                        date_obj = datetime.fromisoformat(generated_date)
                                         st.write(f"Date: {date_obj.strftime('%Y-%m-%d')}")
                                     except:
                                         st.write(f"Date: {generated_date}")
@@ -2962,7 +2954,7 @@ def show_activation_required_page():
                                         # Deactivate the key
                                         actual_index = len(records) - 15 + i
                                         records[actual_index]['status'] = 'deactivated'
-                                        records[actual_index]['deactivated_date'] = datetime.datetime.now().isoformat()
+                                        records[actual_index]['deactivated_date'] = datetime.now().isoformat()
                                         records[actual_index]['deactivated_by'] = 'teacher_bamstep'
 
                                         # Save updated records with proper file handling
@@ -3013,7 +3005,7 @@ def show_activation_required_page():
                                 for record in records:
                                     if record.get('status', 'generated') != 'deactivated':
                                         record['status'] = 'deactivated'
-                                        record['deactivated_date'] = datetime.datetime.now().isoformat()
+                                        record['deactivated_date'] = datetime.now().isoformat()
                                         record['deactivated_by'] = 'teacher_bamstep'
                                         deactivated_count += 1
 
@@ -3065,7 +3057,7 @@ def show_activation_required_page():
                                     for record in records:
                                         if record.get('activation_key') == current_key:
                                             record['status'] = 'deactivated'
-                                            record['deactivated_date'] = datetime.datetime.now().isoformat()
+                                            record['deactivated_date'] = datetime.now().isoformat()
                                             record['deactivated_by'] = 'teacher_bamstep'
                                             break
 
@@ -3162,7 +3154,7 @@ def show_activation_required_page():
                         'phone': support_phone,
                         'message': support_message,
                         'updated_by': 'Stephen@22',
-                        'updated_date': datetime.datetime.now().isoformat()
+                        'updated_date': datetime.now().isoformat()
                     }
 
                     with open("support_config.json", 'w') as f:
@@ -3235,14 +3227,14 @@ def staff_login_form():
                             increment_failed_attempts(user_id)
                             log_teacher_activity(user_id, "failed_login", {
                                 "attempted_user_id": user_id,
-                                "timestamp": datetime.datetime.now().isoformat(),
+                                "timestamp": datetime.now().isoformat(),
                                 "reason": "invalid_password"
                             })
                             st.error("❌ Invalid credentials. Please try again.")
                     else:
                         log_teacher_activity(user_id or "unknown", "failed_login", {
                             "attempted_user_id": user_id,
-                            "timestamp": datetime.datetime.now().isoformat(),
+                            "timestamp": datetime.now().isoformat(),
                             "reason": "user_not_found"
                         })
                         st.error("❌ Invalid credentials. Please try again.")
@@ -3283,7 +3275,7 @@ def complete_login(user_id, user):
     reset_failed_attempts(user_id)
 
     log_teacher_activity(user_id, "login", {
-        "login_time": datetime.datetime.now().isoformat(),
+        "login_time": datetime.now().isoformat(),
         "ip_address": "replit_session",
         "user_role": user.get('role', 'teacher')
     })
@@ -3294,7 +3286,7 @@ def complete_login(user_id, user):
     st.session_state.user_role = user.get('role', 'teacher')
     st.session_state.user_permissions = USER_ROLES.get(user.get('role', 'teacher'), {}).get('permissions', [])
     st.session_state.session_timeout = user.get('session_timeout', 30)
-    st.session_state.last_activity = datetime.datetime.now()
+    st.session_state.last_activity = datetime.now()
 
     st.success(f"✅ Welcome, {user.get('full_name', user_id)}!")
     st.rerun()
@@ -3339,7 +3331,7 @@ def draft_reports_tab():
                     last_modified = draft.get('last_modified', '')
                     if last_modified:
                         try:
-                            formatted_date = datetime.datetime.fromisoformat(last_modified).strftime('%Y-%m-%d %H:%M')
+                            formatted_date = datetime.fromisoformat(last_modified).strftime('%Y-%m-%d %H:%M')
                             st.write(f"**Last Modified:** {formatted_date}")
                         except:
                             st.write(f"**Last Modified:** {last_modified}")
@@ -3616,8 +3608,8 @@ def report_generator_tab():
                     "term": term,
                     "parent_email": parent_email,
                     "teacher_id": st.session_state.teacher_id,
-                    "created_date": datetime.datetime.now().isoformat(),
-                    "last_modified": datetime.datetime.now().isoformat(),
+                    "created_date": datetime.now().isoformat(),
+                    "last_modified": datetime.now().isoformat(),
                     "subject_scores": subject_scores,
                     "additional_data": additional_data,
                     "completion_status": f"{completion_percentage:.0f}",
@@ -3636,10 +3628,10 @@ def report_generator_tab():
         # Auto-save timer (every 30 seconds if data exists)
         if student_name and student_class and selected_subjects:
             if 'last_auto_save' not in st.session_state:
-                st.session_state.last_auto_save = datetime.datetime.now()
+                st.session_state.last_auto_save = datetime.now()
 
             # Check if 30 seconds have passed since last auto-save
-            time_diff = datetime.datetime.now() - st.session_state.last_auto_save
+            time_diff = datetime.now() - st.session_state.last_auto_save
             if time_diff.seconds >= 30:
                 # Auto-save logic (same as manual save but marked as auto_save=True)
                 subject_scores = {}
@@ -3683,8 +3675,8 @@ def report_generator_tab():
                         "term": term,
                         "parent_email": parent_email,
                         "teacher_id": st.session_state.teacher_id,
-                        "created_date": datetime.datetime.now().isoformat(),
-                        "last_modified": datetime.datetime.now().isoformat(),
+                        "created_date": datetime.now().isoformat(),
+                        "last_modified": datetime.now().isoformat(),
                         "subject_scores": subject_scores,
                         "additional_data": additional_data,
                         "completion_status": f"{completion_percentage:.0f}",
@@ -3693,7 +3685,7 @@ def report_generator_tab():
                     }
 
                     save_draft_report(draft_data)
-                    st.session_state.last_auto_save = datetime.datetime.now()
+                    st.session_state.last_auto_save = datetime.now()
                     st.session_state.auto_save_notification = True
 
             st.info(f"🔄 Auto-save: {30 - time_diff.seconds}s")
@@ -3783,7 +3775,7 @@ def report_generator_tab():
                 "term": term,
                 "parent_email": parent_email,
                 "teacher_id": st.session_state.teacher_id,
-                "created_date": datetime.datetime.now().isoformat(),
+                "created_date": datetime.now().isoformat(),
                 "status": "pending_review",
                 "scores_data": updated_scores_data,
                 "average_cumulative": float(average_cumulative),
@@ -4091,7 +4083,7 @@ def verification_tab():
                     for report in recent_reports[:10]:  # Show last 10 reports
                         date_str = report['date']
                         try:
-                            date_obj = datetime.datetime.fromisoformat(date_str)
+                            date_obj = datetime.fromisoformat(date_str)
                             formatted_date = date_obj.strftime('%Y-%m-%d %H:%M')
                         except:
                             formatted_date = date_str
@@ -4230,7 +4222,7 @@ def verification_tab():
 
                         if created_date != 'N/A':
                             try:
-                                formatted_created = datetime.datetime.fromisoformat(created_date).strftime('%B %d, %Y at %I:%M %p')
+                                formatted_created = datetime.fromisoformat(created_date).strftime('%B %d, %Y at %I:%M %p')
                                 st.write(f"**Created Date:** {formatted_created}")
                             except:
                                 st.write(f"**Created Date:** {created_date}")
@@ -4239,7 +4231,7 @@ def verification_tab():
 
                         if approved_date != 'N/A':
                             try:
-                                formatted_approved = datetime.datetime.fromisoformat(approved_date).strftime('%B %d, %Y at %I:%M %p')
+                                formatted_approved = datetime.fromisoformat(approved_date).strftime('%B %d, %Y at %I:%M %p')
                                 st.write(f"**Approved Date:** {formatted_approved}")
                             except:
                                 st.write(f"**Approved Date:** {approved_date}")
@@ -4360,7 +4352,7 @@ def admin_panel_tab():
                                 "full_name": new_full_name,
                                 "email": new_email,
                                 "phone": new_phone,
-                                "created_date": datetime.datetime.now().isoformat(),
+                                "created_date": datetime.now().isoformat(),
                                 "last_login": None,
                                 "active": True,
                                 "two_factor_enabled": False,
@@ -5032,7 +5024,7 @@ def admin_panel_tab():
                     "enabled": enable_auto_backup,
                     "frequency": backup_frequency,
                     "max_backups": max_backups,
-                    "last_backup": datetime.datetime.now().isoformat()
+                    "last_backup": datetime.now().isoformat()
                 }
 
                 with open("backup_config.json", 'w') as f:
@@ -5138,7 +5130,7 @@ def admin_panel_tab():
                     st.download_button(
                         "📥 Download Parent Contact List",
                         csv_buffer.getvalue(),
-                        file_name=f"parent_contacts_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
+                        file_name=f"parent_contacts_{datetime.now().strftime('%Y%m%d')}.csv",
                         mime="text/csv"
                     )
             else:
@@ -5231,7 +5223,7 @@ def admin_panel_tab():
 
         if recent_logs:
             for log in recent_logs:
-                timestamp = datetime.datetime.fromisoformat(log['timestamp'])
+                timestamp = datetime.fromisoformat(log['timestamp'])
                 st.write(f"**{timestamp.strftime('%Y-%m-%d %H:%M')}** - {log['user_id']} - {log['action']}")
         else:
             st.info("No recent activity found.")
@@ -5306,7 +5298,7 @@ def admin_panel_tab():
                             st.download_button(
                                 "📥 Download Student Data (JSON)",
                                 json_str,
-                                file_name=f"student_export_{student_identifier}_{datetime.datetime.now().strftime('%Y%m%d')}.json",
+                                file_name=f"student_export_{student_identifier}_{datetime.now().strftime('%Y%m%d')}.json",
                                 mime="application/json"
                             )
                         else:
@@ -5322,7 +5314,7 @@ def admin_panel_tab():
                         st.download_button(
                             "📥 Download All Student Data (JSON)",
                             json_str,
-                            file_name=f"all_students_export_{datetime.datetime.now().strftime('%Y%m%d')}.json",
+                            file_name=f"all_students_export_{datetime.now().strftime('%Y%m%d')}.json",
                             mime="application/json"
                         )
                     else:
@@ -5399,7 +5391,7 @@ def admin_panel_tab():
                     'message': support_message,
                     'instructions': additional_instructions,
                     'updated_by': st.session_state.teacher_id,
-                    'updated_date': datetime.datetime.now().isoformat()
+                    'updated_date': datetime.now().isoformat()
                 }
 
                 try:
@@ -5523,7 +5515,7 @@ def admin_panel_tab():
                         'next_term_date': next_term_date,
                         'school_calendar': school_calendar,
                         'updated_by': st.session_state.teacher_id,
-                        'updated_date': datetime.datetime.now().isoformat()
+                        'updated_date': datetime.now().isoformat()
                     }
 
                     if save_school_config(new_config):
@@ -5661,7 +5653,7 @@ def admin_panel_tab():
                             'secondary_color': secondary_color,
                             'accent_color': accent_color,
                             'updated_by': st.session_state.teacher_id,
-                            'updated_date': datetime.datetime.now().isoformat()
+                            'updated_date': datetime.now().isoformat()
                         })
                         save_branding_config(branding_config)
                         st.success("✅ Color theme updated!")
@@ -5864,7 +5856,7 @@ def admin_panel_tab():
                                 'sort_code': sort_code
                             },
                             'updated_by': st.session_state.teacher_id,
-                            'updated_date': datetime.datetime.now().isoformat()
+                            'updated_date': datetime.now().isoformat()
                         }
 
                         if save_activation_config(new_config):
@@ -5908,7 +5900,7 @@ def admin_panel_tab():
                     else:
                         st.success("✅ System is activated")
                         if expiry:
-                            days_left = (expiry - datetime.datetime.now()).days
+                            days_left = (expiry - datetime.now()).days
                             st.write(f"**Expires in:** {days_left} days")
                 else:
                     st.warning("⚠️ System requires activation")
@@ -5935,7 +5927,7 @@ def admin_panel_tab():
                                     date_str = record.get('generated_date', '')
                                     if date_str:
                                         try:
-                                            date_obj = datetime.datetime.fromisoformat(date_str)
+                                            date_obj = datetime.fromisoformat(date_str)
                                             st.write(date_obj.strftime('%Y-%m-%d'))
                                         except:
                                             st.write(date_str[:10])
@@ -5998,7 +5990,7 @@ def admin_panel_tab():
 
             if recent_logs:
                 for log in recent_logs:
-                    timestamp = datetime.datetime.fromisoformat(log['timestamp'])
+                    timestamp = datetime.fromisoformat(log['timestamp'])
                     st.write(f"**{timestamp.strftime('%Y-%m-%d %H:%M')}** - {log['user_id']} - {log['action']}")
             else:
                 st.info("No recent activity found.")
@@ -6031,7 +6023,7 @@ def admin_panel_tab():
                     if filtered_logs:
                         st.write(f"Found {len(filtered_logs)} matching entries:")
                         for log in filtered_logs[:20]:
-                            timestamp = datetime.datetime.fromisoformat(log['timestamp'])
+                            timestamp = datetime.fromisoformat(log['timestamp'])
                             st.write(f"**{timestamp.strftime('%Y-%m-%d %H:%M')}** | {log['user_id']} | {log['action']} | {log.get('details', {})}")
                     else:
                         st.info("No matching audit entries found.")
@@ -6044,7 +6036,7 @@ def admin_panel_tab():
             with col1:
                 if st.button("🗑️ Clean Old Audit Logs (>30 days)"):
                     # Implementation for cleaning old logs
-                    cutoff_date = datetime.datetime.now() - datetime.timedelta(days=30)
+                    cutoff_date = datetime.now() - datetime.timedelta(days=30)
                     st.info(f"Would clean logs older than {cutoff_date.strftime('%Y-%m-%d')}")
 
             with col2:
@@ -6537,7 +6529,7 @@ def report_generator_page():
         # Logout button
         if st.button("🚪 Logout", width='stretch'):
             log_teacher_activity(st.session_state.teacher_id, "logout", {
-                "logout_time": datetime.datetime.now().isoformat()
+                "logout_time": datetime.now().isoformat()
             })
 
             # Clear all session state
