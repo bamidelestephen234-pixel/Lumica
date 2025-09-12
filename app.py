@@ -139,79 +139,79 @@ SYSTEM_FEATURES = {
 }
 
 # Enhanced user management system
+from database.models import User
+from database.db_manager import SessionLocal
+from datetime import datetime
+import uuid
+
 def load_user_database():
-    """Load user database with roles and permissions"""
+    """Load user database from Supabase via SQLAlchemy"""
     try:
-        if os.path.exists("users_database.json"):
-            with open("users_database.json", 'r') as f:
-                return json.load(f)
-        else:
-            # Initialize default users
-            default_users = {
-                "teacher_bamstep": {
-                    "password_hash": hash_password("admin789"),
-                    "role": "principal",
-                    "full_name": "Principal Bamstep",
-                    "email": "principal@akinssunrise.edu.ng",
-                    "phone": "+234 800 123 4567",
-                    "created_date": datetime.datetime.now().isoformat(),
-                    "last_login": None,
-                    "active": True,
-                    "two_factor_enabled": False,
-                    "two_factor_secret": None,
-                    "session_timeout": 30,
-                    "failed_attempts": 0,
-                    "locked_until": None,
-                    "assigned_classes": [],
-                    "departments": ["all"]
-                },
-                "teacher_bola": {
-                    "password_hash": hash_password("secret123"),
-                    "role": "class_teacher",
-                    "full_name": "Teacher Bola",
-                    "email": "bola@akinssunrise.edu.ng",
-                    "phone": "+234 800 234 5678",
-                    "created_date": datetime.datetime.now().isoformat(),
-                    "last_login": None,
-                    "active": True,
-                    "two_factor_enabled": False,
-                    "two_factor_secret": None,
-                    "session_timeout": 30,
-                    "failed_attempts": 0,
-                    "locked_until": None,
-                    "assigned_classes": ["SS1A", "SS1B"],
-                    "departments": ["sciences"]
-                },
-                "school_ict": {
-                    "password_hash": hash_password("akins1111"),
-                    "role": "principal",
-                    "full_name": "Akins Sunrise",
-                    "email": "akinssunrise@gmail.com",
-                    "phone": "+234 8160844529",
-                    "created_date": datetime.datetime.now().isoformat(),
-                    "last_login": None,
-                    "active": True,
-                    "two_factor_enabled": False,
-                    "two_factor_secret": None,
-                    "session_timeout": 30,
-                    "failed_attempts": 0,
-                    "locked_until": None,
-                    "assigned_classes": [],
-                    "departments": ["all"]
-                }
+        session = SessionLocal()
+        users = session.query(User).all()
+        session.close()
+        # Return in the same dict format your app expects
+        return {
+            u.id: {
+                "password_hash": u.password_hash,
+                "role": u.role,
+                "full_name": u.full_name,
+                "email": u.email,
+                "phone": u.phone,
+                "created_date": u.created_date.isoformat() if u.created_date else None,
+                "last_login": u.last_login.isoformat() if u.last_login else None,
+                "active": u.is_active,
+                "two_factor_enabled": False,
+                "two_factor_secret": None,
+                "session_timeout": 30,
+                "failed_attempts": 0,
+                "locked_until": None,
+                "assigned_classes": [],
+                "departments": ["all"] if u.role == "principal" else []
             }
-            save_user_database(default_users)
-            return default_users
+            for u in users
+        }
     except Exception as e:
+        print(f"Error loading users from DB: {e}")
         return {}
 
 def save_user_database(users_db):
-    """Save user database"""
+    """
+    Save user database to Supabase.
+    Expects users_db to be a dict keyed by user_id with user details.
+    """
     try:
-        with open("users_database.json", 'w') as f:
-            json.dump(users_db, f, indent=2)
+        session = SessionLocal()
+        for user_id, data in users_db.items():
+            # Check if user exists
+            existing = session.query(User).filter_by(id=user_id).first()
+            if existing:
+                # Update existing user
+                existing.full_name = data["full_name"]
+                existing.email = data["email"]
+                existing.password_hash = data["password_hash"]
+                existing.role = data["role"]
+                existing.phone = data["phone"]
+                existing.is_active = data["active"]
+                existing.last_login = datetime.utcnow()
+            else:
+                # Create new user
+                new_user = User(
+                    id=user_id if user_id else str(uuid.uuid4()),
+                    full_name=data["full_name"],
+                    email=data["email"],
+                    password_hash=data["password_hash"],
+                    role=data["role"],
+                    phone=data["phone"],
+                    is_active=data["active"],
+                    created_date=datetime.utcnow()
+                )
+                session.add(new_user)
+        session.commit()
+        session.close()
         return True
     except Exception as e:
+        print(f"Error saving users to DB: {e}")
         return False
 
 def check_user_permissions(user_id, required_permission):
