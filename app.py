@@ -2737,10 +2737,10 @@ def show_activation_required_page():
         # Action buttons for the generated key
         col1, col2, col3 = st.columns([1, 1, 1])
         with col1:
-            if st.button("📋 Copy Key to Clipboard", use_container_width=True, type="primary"):
+            if st.button("📋 Copy Key to Clipboard", width='stretch', type="primary"):
                 st.success("✅ Key copied! You can now paste it where needed.")
         with col2:
-            if st.button("📧 Generate New Key", use_container_width=True):
+            if st.button("📧 Generate New Key", width='stretch'):
                 # Clear current key to allow generation of new one
                 if 'generated_activation_key' in st.session_state:
                     del st.session_state.generated_activation_key
@@ -2751,7 +2751,7 @@ def show_activation_required_page():
                 st.info("✨ Current key cleared. Generate a new one below.")
                 st.rerun()
         with col3:
-            if st.button("✅ Continue to Login", use_container_width=True):
+            if st.button("✅ Continue to Login", width='stretch'):
                 # Keep the key but mark as no longer just generated
                 st.session_state.just_generated = False
                 st.rerun()
@@ -3114,7 +3114,7 @@ def staff_login_form():
 
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            if st.button("🚀 Login", use_container_width=True):
+            if st.button("🚀 Login", width='stretch'):
                 if user_id and password:
                     users_db = load_user_database()
 
@@ -3165,7 +3165,7 @@ def two_factor_verification():
 
     col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
-        if st.button("Verify", use_container_width=True):
+        if st.button("Verify", width='stretch'):
             if token and len(token) == 6:
                 if verify_2fa_token(st.session_state.pending_2fa_secret, token):
                     users_db = load_user_database()
@@ -3670,7 +3670,7 @@ def report_generator_tab():
             st.success("✅ Report Card Generated Successfully!")
 
             st.markdown("### 📋 Score Summary")
-            st.dataframe(report_df, use_container_width=True)
+            st.dataframe(report_df, width='stretch')
 
             with open("report_card.pdf", "rb") as f:
                 st.download_button(
@@ -3678,7 +3678,7 @@ def report_generator_tab():
                     f, 
                     file_name=f"{student_name.replace(' ', '_')}_Report_{term.replace(' ', '_')}.pdf", 
                     mime="application/pdf",
-                    use_container_width=True
+                    width='stretch'
                 )
 
             report_data = {
@@ -3953,7 +3953,7 @@ def student_database_tab():
                         with delete_col:
                             if is_admin:
                                 if st.button("🗑️", key=f"delete_{student['student_name']}_{student['student_class']}", 
-                                           help="Delete student", use_container_width=True):
+                                           help="Delete student", width='stretch'):
                                     if delete_student_data(student['student_name'], student['student_class']):
                                         st.success(f"✅ {student['student_name']} deleted successfully!")
                                         st.rerun()
@@ -4170,7 +4170,7 @@ def verification_tab():
                                 f,
                                 file_name=f"Verified_{report_data.get('student_name', 'Student')}_{report_data.get('term', 'Term')}.pdf",
                                 mime="application/pdf",
-                                use_container_width=True
+                                width='stretch'
                             )
 
                 else:
@@ -4870,7 +4870,7 @@ def admin_panel_tab():
                                             placeholder="Enter description for this backup...")
 
         with col2:
-            if st.button("🗃️ Create Backup", use_container_width=True):
+            if st.button("🗃️ Create Backup", width='stretch'):
                 with st.spinner("Creating backup..."):
                     success, message = create_backup()
                     if success:
@@ -5034,7 +5034,7 @@ def admin_panel_tab():
 
                 if parent_data:
                     df = pd.DataFrame(parent_data)
-                    st.dataframe(df, use_container_width=True)
+                    st.dataframe(df, width='stretch')
 
                     # Download parent contact list
                     csv_buffer = StringIO()
@@ -5603,7 +5603,7 @@ def admin_panel_tab():
 
                 # Show current subjects
                 subject_df = pd.DataFrame({'Subjects': current_subjects})
-                st.dataframe(subject_df, use_container_width=True)
+                st.dataframe(subject_df, width='stretch')
 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -5677,7 +5677,7 @@ def admin_panel_tab():
                 ])
 
                 class_df = pd.DataFrame({'Classes': current_classes})
-                st.dataframe(class_df, use_container_width=True)
+                st.dataframe(class_df, width='stretch')
 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -6269,7 +6269,7 @@ def analytics_dashboard_tab():
                     labels={'total_students': 'Number of Students', 'class': 'Class'}
                 )
                 fig_class.update_layout(height=400, showlegend=False)
-                st.plotly_chart(fig_class, use_container_width=True)
+                st.plotly_chart(fig_class, width='stretch')
             else:
                 st.info("No class data available yet")
 
@@ -6287,7 +6287,7 @@ def analytics_dashboard_tab():
                     }
                 )
                 fig_grades.update_layout(height=400)
-                st.plotly_chart(fig_grades, use_container_width=True)
+                st.plotly_chart(fig_grades, width='stretch')
             else:
                 st.info("No grade data available yet")
 
@@ -6306,7 +6306,7 @@ def analytics_dashboard_tab():
             fig_attendance.update_layout(height=400, showlegend=False)
             fig_attendance.add_hline(y=85, line_dash="dash", line_color="red", 
                                    annotation_text="Minimum Target (85%)")
-            st.plotly_chart(fig_attendance, use_container_width=True)
+            st.plotly_chart(fig_attendance, width='stretch')
         else:
             st.info("No attendance data available yet")
 
@@ -6350,7 +6350,7 @@ def analytics_dashboard_tab():
                 color_continuous_scale='RdYlGn'
             )
             fig_subjects.update_layout(height=max(400, len(subject_df) * 30))
-            st.plotly_chart(fig_subjects, use_container_width=True)
+            st.plotly_chart(fig_subjects, width='stretch')
         else:
             st.info("No subject performance data available yet")
 
@@ -6440,7 +6440,7 @@ def report_generator_page():
         """, unsafe_allow_html=True)
 
         # Logout button
-        if st.button("🚪 Logout", use_container_width=True):
+        if st.button("🚪 Logout", width='stretch'):
             log_teacher_activity(st.session_state.teacher_id, "logout", {
                 "logout_time": datetime.datetime.now().isoformat()
             })
