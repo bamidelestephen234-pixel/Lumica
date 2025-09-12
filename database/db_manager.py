@@ -4,7 +4,8 @@ import sys
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
-from models import Base
+from database.models import Base  # fixed import
+
 
 # 1. Get database URL from environment/secrets
 DATABASE_URL = os.getenv("DATABASE_URL")
