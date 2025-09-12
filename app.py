@@ -1773,9 +1773,20 @@ def activate_system(activation_key, subscription_type="monthly"):
         if not key_found:
             return False
 
+        # Check if system is already activated to preserve original activation date
+        existing_activation_date = None
+        if os.path.exists("activation_status.json"):
+            try:
+                with open("activation_status.json", 'r') as f:
+                    existing_status = json.load(f)
+                    if existing_status.get('activated', False):
+                        existing_activation_date = existing_status.get('activation_date')
+            except:
+                pass
+
         activation_data = {
             "activated": True,
-            "activation_date": datetime.datetime.now().isoformat(),
+            "activation_date": existing_activation_date or datetime.datetime.now().isoformat(),
             "activation_key": activation_key,
             "subscription_type": key_subscription_type,
             "activated_by": "system",
@@ -6488,6 +6499,16 @@ def report_generator_page():
                     admin_panel_tab()
 
 def main():
+    # Initialize database on startup
+    try:
+        from database.db_manager import db_manager
+        db_manager.init_database()
+    except Exception as e:
+        # Log detailed error server-side, show generic message to user
+        import logging
+        logging.error(f"Database initialization failed: {e}")
+        st.error("Database initialization failed. Please contact system administrator.")
+    
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
     if 'teacher_id' not in st.session_state:
