@@ -89,8 +89,7 @@ USER_ROLES = {
         "default_features": []
     }
 },
-
-    "head_of_department": {
+"head_of_department": {
         "level": 4,
         "permissions": ["department_reports", "teacher_management", "grade_boundaries", "class_management"],
         "description": "Head of Department - Departmental oversight",
