@@ -6487,6 +6487,7 @@ def report_generator_page():
             with tabs[i]:
                 if tab_key == "reports":
                     report_generator_tab()
+                    
                 elif tab_key == "drafts":
                     draft_reports_tab()
                 elif tab_key == "database":
