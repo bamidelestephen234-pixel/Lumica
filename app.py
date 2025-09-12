@@ -2,11 +2,9 @@
 =====================================================
 AKIN'S SUNRISE SCHOOL REPORT CARD MANAGEMENT SYSTEM
 =====================================================
-
 School Management System - Report Card Generator
 Author: School Administration
 """
-
 
 import streamlit as st
 import pandas as pd
@@ -33,7 +31,26 @@ from plotly.subplots import make_subplots
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from datetime import datetime
 
+# Database imports
+from database.db_manager import SessionLocal
+from database.models import ActivationKey
+
+# Import activation functions (must be defined in another file or above this block)
+from your_module_name import get_current_activation_key, generate_activation_key
+# Replace 'your_module_name' with the actual file name if these functions are not in app.py
+
+# --- Auto-generate activation key if none exists ---
+if not get_current_activation_key():
+    new_key = generate_activation_key(
+        school_name="Akin's Sunrise School",
+        subscription_type="premium",
+        expires_at=datetime(2025, 12, 31)
+    )
+    print(f"Generated new activation key: {new_key}")
+
+# Google Drive integration
 try:
     from google.oauth2.credentials import Credentials
     from google_auth_oauthlib.flow import Flow
@@ -43,6 +60,7 @@ try:
 except ImportError:
     GOOGLE_DRIVE_AVAILABLE = False
 
+# Email integration
 try:
     import smtplib
     from email.mime.multipart import MIMEMultipart
@@ -53,11 +71,13 @@ try:
 except ImportError:
     EMAIL_AVAILABLE = False
 
+# Subjects list
 subjects = sorted([
-    "English", "Maths", "French", "C.C Art", "Business Studies", "Economics", "Yoruba",
-    "physics", "chemistry", "Biology", "Further Mathematics", "National Value", 
-    "Lit-in-Eng", "Guidance & Counseling", "C.R.S", "Agric Sci", "Home Eco", 
-    "Basic Science", "Basic Tech", "PHE", "Computer","civic Education","Goverment","Geography","Animal Husbandry","Marketing",
+    "English", "Maths", "French", "C.C Art", "Business Studies", "Economics",
+    "Yoruba", "physics", "chemistry", "Biology", "Further Mathematics",
+    "National Value", "Lit-in-Eng", "Guidance & Counseling", "C.R.S",
+    "Agric Sci", "Home Eco", "Basic Science", "Basic Tech", "PHE", "Computer",
+    "civic Education", "Goverment", "Geography", "Animal Husbandry", "Marketing",
 ])
 
 # User roles and permissions
@@ -66,11 +86,10 @@ USER_ROLES = {
         "level": 5,
         "permissions": ["all_access", "user_management", "system_config", "backup_restore", "data_export"],
         "description": "Principal - Full system access",
-        "default_features": [
-            "report_generation", "draft_management", "student_database", 
-            "analytics_dashboard", "verification_system", "admin_panel"
-        ]
-    },
+        "default_features": []
+    }
+}
+
     "head_of_department": {
         "level": 4,
         "permissions": ["department_reports", "teacher_management", "grade_boundaries", "class_management"],
