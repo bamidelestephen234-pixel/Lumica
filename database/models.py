@@ -57,3 +57,16 @@ class SubjectScore(Base):
     total_score = Column(Float)
     cumulative = Column(Float)
     grade = Column(String)
+
+class VerificationCode(Base):
+    __tablename__ = "verification_codes"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(String, ForeignKey('users.id'), nullable=True)  # For user-specific codes (2FA)
+    code_type = Column(String, nullable=False)  # '2fa', 'report_verification', 'password_reset', etc.
+    code_value = Column(String, nullable=False)  # The actual verification code
+    entity_id = Column(String, nullable=True)  # Report ID, User ID, or other entity being verified
+    is_used = Column(Boolean, default=False)
+    created_date = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)  # For time-sensitive codes
+    extra_data = Column(Text, nullable=True)  # JSON string for additional data
+    user = relationship("User")
