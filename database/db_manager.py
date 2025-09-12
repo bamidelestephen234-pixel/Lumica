@@ -7,13 +7,11 @@ from sqlalchemy.exc import OperationalError
 from models import Base
 
 # 1. Get database URL from environment/secrets
-DATABASE_URL = os.getenv("DATABASE_URL="postgresql://postgres:Stephen%4022.33%2F@db.hiijvgzblottszoulseh.supabase.co:5432/postgres"
-")
+DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     sys.exit("❌ DATABASE_URL not set. Please add it to your secrets.")
 
 # 2. Create SQLAlchemy engine
-# For Supabase/PostgreSQL
 try:
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 except Exception as e:
@@ -32,6 +30,5 @@ def init_db():
     except Exception as e:
         sys.exit(f"❌ Unexpected error during DB init: {e}")
 
-# Optional: quick test when running this file directly
 if __name__ == "__main__":
     init_db()
