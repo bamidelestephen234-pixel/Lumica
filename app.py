@@ -114,13 +114,13 @@ USER_ROLES = {
             "report_generation", "draft_management", "verification_system"
         ]
     },
-    "parent": {
+       "parent": {
         "level": 1,
         "permissions": ["view_child_reports", "communication"],
         "description": "Parent - View child's reports only",
         "default_features": []
     }
-}
+}  # ← closes USER_ROLES, only one brace here
 
 # Available system features
 SYSTEM_FEATURES = {
