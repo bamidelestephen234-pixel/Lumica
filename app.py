@@ -3351,14 +3351,21 @@ def staff_login_form():
 
         # Find user by ID or email
         def find_user_by_id_or_email(user_input, users_db):
-            """Find user by either ID or email"""
-            # First, try to find by user ID
+            """Find user by either ID or email - handles both UUID keys (Supabase) and username keys (fallback)"""
+            # First, try to find by exact user ID (for backwards compatibility)
             if user_input in users_db:
                 return user_input, users_db[user_input]
             
-            # If not found by ID, search by email
+            # Search by email OR by id field within user data (for Supabase UUID keys)
             for user_id, user_data in users_db.items():
+                # Check by email
                 if user_data.get('email', '').lower() == user_input.lower():
+                    return user_id, user_data
+                # Check by id field (in case user entered their registered ID)
+                if user_data.get('id', '').lower() == user_input.lower():
+                    return user_id, user_data
+                # Check by username field if it exists
+                if user_data.get('username', '').lower() == user_input.lower():
                     return user_id, user_data
             
             return None, None
