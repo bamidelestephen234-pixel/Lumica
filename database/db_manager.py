@@ -1,35 +1,93 @@
 # db_manager.py
 import os
 import sys
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
-from database.models import Base  # fixed import
+from database.models import Base
 
+class DatabaseManager:
+    def __init__(self):
+        self.engine = None
+        self.SessionLocal = None
+        self._initialize_connection()
+    
+    def _initialize_connection(self):
+        # Get database URL from environment variables only
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        
+        if not DATABASE_URL:
+            print("❌ DATABASE_URL not found in environment variables.")
+            print("Please set DATABASE_URL in your Replit Secrets.")
+            self.engine = None
+            self.SessionLocal = None
+            return
+        
+        # Sanitize the URL by removing quotes and whitespace
+        url = DATABASE_URL.strip()
+        if (url.startswith('"') and url.endswith('"')) or (url.startswith("'") and url.endswith("'")):
+            url = url[1:-1]
+        
+        try:
+            self.engine = create_engine(url, pool_pre_ping=True)
+            self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+            
+            # Validate connection with a quick test
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            
+            print("✅ Database connection established and validated successfully.")
+        except Exception as e:
+            print(f"❌ Failed to create database engine: {e}")
+            print(f"   URL format issue detected (credentials not logged for security)")
+            self.engine = None
+            self.SessionLocal = None
+    
+    def get_session(self):
+        if not self.SessionLocal:
+            return None
+        return self.SessionLocal()
+    
+    def is_available(self):
+        return self.engine is not None
+    
+    def init_database(self):
+        """Initialize database tables"""
+        if not self.is_available():
+            print("❌ Database not available, skipping table initialization")
+            return False
+        
+        try:
+            Base.metadata.create_all(bind=self.engine)
+            print("✅ Database tables initialized successfully.")
+            return True
+        except OperationalError as e:
+            print(f"❌ Database initialization failed: {e}")
+            return False
+        except Exception as e:
+            print(f"❌ Unexpected error during DB init: {e}")
+            return False
 
-# 1. Get database URL from environment/secrets
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    sys.exit("❌ DATABASE_URL not set. Please add it to your Streamlit secrets.")
+# Create global instance
+db_manager = DatabaseManager()
 
-# 2. Create SQLAlchemy engine
-try:
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-except Exception as e:
-    sys.exit(f"❌ Failed to create engine: {e}")
-
-# 3. Create session factory
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# 4. Initialize tables
+# Initialize tables function
 def init_db():
+    """Initialize database tables"""
+    if not db_manager.is_available():
+        print("❌ Database not available, skipping table initialization")
+        return False
+    
     try:
-        Base.metadata.create_all(bind=engine)
-        print("✅ Database initialized successfully.")
+        Base.metadata.create_all(bind=db_manager.engine)
+        print("✅ Database tables initialized successfully.")
+        return True
     except OperationalError as e:
-        sys.exit(f"❌ Database initialization failed: {e}")
+        print(f"❌ Database initialization failed: {e}")
+        return False
     except Exception as e:
-        sys.exit(f"❌ Unexpected error during DB init: {e}")
+        print(f"❌ Unexpected error during DB init: {e}")
+        return False
 
 if __name__ == "__main__":
     init_db()
