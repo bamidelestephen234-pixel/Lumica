@@ -182,14 +182,41 @@ from datetime import datetime, timedelta
 import uuid
 
 def load_user_database():
-    """Load user database from Supabase via SQLAlchemy or fallback to JSON"""
+    """Load user database from Supabase via SQLAlchemy with robust cloud restart handling"""
+    # Always try database first, even if initial connection seemed to fail
+    # This handles Streamlit Cloud restart scenarios where DATABASE_AVAILABLE 
+    # might be False due to initialization timing issues
+    
+    # Try to reinitialize database connection if it failed before
+    global db_manager, DATABASE_AVAILABLE
+    
     if not DATABASE_AVAILABLE or not db_manager:
-        # Fallback to JSON file for deployment
-        return load_user_database_fallback()
+        try:
+            # Try importing database modules directly (they might work now)
+            from database.models import User as UserModel
+            from database.db_manager import DatabaseManager
+            
+            # Create a fresh database manager instance
+            fresh_db_manager = DatabaseManager()
+            if fresh_db_manager.engine is not None:
+                # Connection successful, use it
+                db_manager = fresh_db_manager
+                DATABASE_AVAILABLE = True
+                print("✅ Database connection recovered after restart")
+            else:
+                print("❌ Fresh database connection also failed, using fallback")
+                return load_user_database_fallback()
+        except Exception as e:
+            print(f"❌ Could not recover database connection: {e}")
+            return load_user_database_fallback()
     
     try:
+        # Import User here to ensure it's available
+        if 'UserModel' not in locals():
+            from database.models import User as UserModel
+        
         session = db_manager.get_session()
-        users = session.query(User).all()
+        users = session.query(UserModel).all()
         session.close()
         # Return in the same dict format your app expects
         return {
@@ -1756,13 +1783,39 @@ def save_activation_config(config):
         return False
 
 def check_activation_status():
-    """Check if the system is activated by querying Supabase directly - no local file dependencies"""
+    """Check if the system is activated by querying Supabase directly - handles cloud restart scenarios"""
     try:
-        # Always query Supabase directly for active keys
-        if DATABASE_AVAILABLE and db_manager:
+        # Always try database first, attempt to recover connection if needed
+        current_db_available = DATABASE_AVAILABLE
+        current_db_manager = db_manager
+        
+        # If database wasn't available initially, try to recover it now
+        if not current_db_available or not current_db_manager:
             try:
-                session = db_manager.get_session()
-                active_key = session.query(ActivationKey).filter_by(is_active=True).first()
+                from database.models import ActivationKey as ActivationKeyModel
+                from database.db_manager import DatabaseManager
+                
+                # Create a fresh database manager instance for activation check
+                fresh_db_manager = DatabaseManager()
+                if fresh_db_manager.engine is not None:
+                    current_db_available = True
+                    current_db_manager = fresh_db_manager
+                    print("✅ Database connection recovered for activation check")
+                else:
+                    # Database still not available
+                    return False, {"status": "database_unavailable"}, None
+            except Exception as e:
+                print(f"❌ Could not recover database connection for activation: {e}")
+                return False, {"status": "database_connection_failed"}, None
+        
+        if current_db_available and current_db_manager:
+            try:
+                # Import ActivationKey here to ensure it's available
+                if 'ActivationKeyModel' not in locals():
+                    from database.models import ActivationKey as ActivationKeyModel
+                
+                session = current_db_manager.get_session()
+                active_key = session.query(ActivationKeyModel).filter_by(is_active=True).first()
                 session.close()
                 
                 if active_key:
@@ -1782,14 +1835,14 @@ def check_activation_status():
                         
             except Exception as e:
                 print(f"Error querying activation keys from DB: {e}")
-                # Allow login if database query fails - don't block on database errors
+                # Don't block login on database query errors
                 return True, {"status": "database_error_allowing_access"}, None
 
         # If no database available or no active keys found, system is not activated
         return False, {"status": "no_active_key"}, None
     except Exception as e:
         print(f"Check activation status error: {e}")
-        # Allow login if there's an unexpected error - don't block users
+        # Don't block login on unexpected errors
         return True, {"status": "error_allowing_access"}, None
 
 def is_activation_key_deactivated(activation_key):
