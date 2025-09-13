@@ -1730,27 +1730,21 @@ def get_premium_features():
     }
 
 def load_activation_config():
-    """Load activation system configuration"""
-    try:
-        if os.path.exists("activation_config.json"):
-            with open("activation_config.json", 'r') as f:
-                return json.load(f)
-        return {
-            "monthly_amount": 20000,
-            "yearly_amount": 60000,
-            "currency": "NGN",
-            "bank_details": {
-                "bank_name": "First Bank Nigeria",
-                "account_name": "Bamstep Technologies",
-                "account_number": "1234567890",
-                "sort_code": "011"
-            },
-            "activation_enabled": True,
-            "trial_period_days": 30,
-            "grace_period_days": 7
-        }
-    except Exception:
-        return {}
+    """Load activation system configuration - always use defaults to avoid local file dependency"""
+    return {
+        "monthly_amount": 20000,
+        "yearly_amount": 60000,
+        "currency": "NGN",
+        "bank_details": {
+            "bank_name": "First Bank Nigeria",
+            "account_name": "Bamstep Technologies",
+            "account_number": "1234567890",
+            "sort_code": "011"
+        },
+        "activation_enabled": True,  # Always enabled to check database
+        "trial_period_days": 30,
+        "grace_period_days": 7
+    }
 
 def save_activation_config(config):
     """Save activation system configuration"""
@@ -1762,20 +1756,9 @@ def save_activation_config(config):
         return False
 
 def check_activation_status():
-    """Check if the system is activated by querying Supabase directly"""
+    """Check if the system is activated by querying Supabase directly - no local file dependencies"""
     try:
-        config = load_activation_config()
-
-        # If activation is disabled in config, system is not activated regardless of other factors
-        # EXCEPT for the developer account (teacher_bamstep) who can always access
-        if not config.get('activation_enabled', True):
-            # Allow developer to bypass activation requirement
-            current_user = st.session_state.get('teacher_id')
-            if current_user == 'teacher_bamstep':
-                return True, {"status": "developer_bypass", "user": "teacher_bamstep"}, None
-            return False, {"status": "activation_disabled"}, None
-
-        # Query Supabase directly for active keys instead of using local files
+        # Always query Supabase directly for active keys
         if DATABASE_AVAILABLE and db_manager:
             try:
                 session = db_manager.get_session()
@@ -1787,54 +1770,27 @@ def check_activation_status():
                     if active_key.expires_at and active_key.expires_at < datetime.utcnow():
                         return False, {"status": "key_expired", "activation_key": active_key.key_value}, active_key.expires_at
                     
-                    # Key is active and not expired
-                    expiry_date = active_key.expires_at
-                    if expiry_date:
-                        # Add grace period if close to expiry
-                        grace_period = config.get('grace_period_days', 7)
-                        grace_expiry = expiry_date + timedelta(days=grace_period)
-                        
-                        if datetime.utcnow() <= grace_expiry:
-                            status = {
-                                "activated": True,
-                                "activation_key": active_key.key_value,
-                                "subscription_type": active_key.subscription_type,
-                                "school_name": active_key.school_name,
-                                "expires_at": expiry_date.isoformat() if expiry_date else None
-                            }
-                            return True, status, expiry_date
-                        else:
-                            return False, {"status": "expired", "activation_key": active_key.key_value}, expiry_date
-                    else:
-                        # No expiry date, key is perpetual
-                        status = {
-                            "activated": True,
-                            "activation_key": active_key.key_value,
-                            "subscription_type": active_key.subscription_type,
-                            "school_name": active_key.school_name,
-                            "expires_at": None
-                        }
-                        return True, status, None
+                    # Key is active and not expired - system is activated
+                    status = {
+                        "activated": True,
+                        "activation_key": active_key.key_value,
+                        "subscription_type": active_key.subscription_type,
+                        "school_name": active_key.school_name,
+                        "expires_at": active_key.expires_at.isoformat() if active_key.expires_at else None
+                    }
+                    return True, status, active_key.expires_at
                         
             except Exception as e:
                 print(f"Error querying activation keys from DB: {e}")
+                # Allow login if database query fails - don't block on database errors
+                return True, {"status": "database_error_allowing_access"}, None
 
-        # Fallback: Check trial period only if activation is enabled and no active keys found
-        trial_days = config.get('trial_period_days', 30)
-        
-        # Use creation date of users_database.json as trial start for fallback
-        if os.path.exists("users_database.json"):
-            stat = os.stat("users_database.json")
-            creation_time = datetime.fromtimestamp(stat.st_ctime)
-            trial_expiry = creation_time + timedelta(days=trial_days)
-
-            if datetime.now() <= trial_expiry:
-                return True, {"status": "trial", "trial_expiry": trial_expiry.isoformat()}, trial_expiry
-
-        return False, {}, None
+        # If no database available or no active keys found, system is not activated
+        return False, {"status": "no_active_key"}, None
     except Exception as e:
         print(f"Check activation status error: {e}")
-        return False, {}, None  # Default to not activated if there's an error
+        # Allow login if there's an unexpected error - don't block users
+        return True, {"status": "error_allowing_access"}, None
 
 def is_activation_key_deactivated(activation_key):
     """Check if an activation key has been deactivated by querying Supabase directly"""
