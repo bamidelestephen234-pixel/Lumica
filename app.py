@@ -20,6 +20,7 @@ import threading
 import time
 import csv
 import uuid
+import string
 import pyotp
 import qrcode as qr_gen
 from io import BytesIO, StringIO
@@ -66,6 +67,21 @@ except ImportError:
     EMAIL_AVAILABLE = False
 
 # Subjects list
+# Utility functions - defined early for use throughout the app
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
+    return salt + pwd_hash.hex()
+
+def verify_password(password: str, hashed: str) -> bool:
+    try:
+        salt = hashed[:32]
+        stored_hash = hashed[32:]
+        pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
+        return pwd_hash.hex() == stored_hash
+    except:
+        return False
+
 subjects = sorted([
     "English", "Maths", "French", "C.C Art", "Business Studies", "Economics",
     "Yoruba", "physics", "chemistry", "Biology", "Further Mathematics",
@@ -162,7 +178,7 @@ except ImportError as e:
     DATABASE_AVAILABLE = False
     db_manager = None
     print(f"Database not available: {e}")
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 
 def load_user_database():
@@ -389,7 +405,7 @@ def increment_failed_attempts(user_id):
 
         # Lock account after 3 failed attempts
         if users_db[user_id]['failed_attempts'] >= 3:
-            lock_time = datetime.now() + datetime.timedelta(minutes=30)
+            lock_time = datetime.now() + timedelta(minutes=30)
             users_db[user_id]['locked_until'] = lock_time.isoformat()
 
         save_user_database(users_db)
@@ -1621,11 +1637,11 @@ def add_premium_subscription(parent_email, plan_type="monthly"):
         # Calculate expiry based on plan type
         now = datetime.now()
         if plan_type == "monthly":
-            expiry = now + datetime.timedelta(days=30)
+            expiry = now + timedelta(days=30)
         elif plan_type == "yearly":
-            expiry = now + datetime.timedelta(days=365)
+            expiry = now + timedelta(days=365)
         else:
-            expiry = now + datetime.timedelta(days=30)
+            expiry = now + timedelta(days=30)
 
         subscriptions[parent_email] = {
             "active": True,
@@ -1750,14 +1766,14 @@ def check_activation_status():
 
                         # Check if subscription is still valid
                         if status.get('subscription_type') == 'monthly':
-                            expiry = activation_dt + datetime.timedelta(days=30)
+                            expiry = activation_dt + timedelta(days=30)
                         elif status.get('subscription_type') == 'yearly':
-                            expiry = activation_dt + datetime.timedelta(days=365)
+                            expiry = activation_dt + timedelta(days=365)
                         else:
-                            expiry = activation_dt + datetime.timedelta(days=30)
+                            expiry = activation_dt + timedelta(days=30)
 
                         grace_period = config.get('grace_period_days', 7)
-                        grace_expiry = expiry + datetime.timedelta(days=grace_period)
+                        grace_expiry = expiry + timedelta(days=grace_period)
 
                         if datetime.now() <= grace_expiry:
                             return True, status, expiry
@@ -1771,7 +1787,7 @@ def check_activation_status():
         if os.path.exists("users_database.json"):
             stat = os.stat("users_database.json")
             creation_time = datetime.fromtimestamp(stat.st_ctime)
-            trial_expiry = creation_time + datetime.timedelta(days=trial_days)
+            trial_expiry = creation_time + timedelta(days=trial_days)
 
             if datetime.now() <= trial_expiry:
                 return True, {"status": "trial", "trial_expiry": trial_expiry.isoformat()}, trial_expiry
@@ -1833,7 +1849,9 @@ def generate_activation_key(school_name=None, subscription_type="monthly", expir
     # Save to Supabase
     session = db_manager.get_session()
     new_key = ActivationKey(
+        id=str(uuid.uuid4()),
         key_value=formatted_key,
+        school_name=school_name,
         subscription_type=subscription_type,
         is_active=True,
         expires_at=expires_at
@@ -2057,7 +2075,7 @@ def log_teacher_activity(teacher_id, activity_type, details):
 
 def render_html_report(student_name, student_class, term, report_df, term_total, cumulative, final_grade, logo_base64, student_data=None, report_details=None, report_id=None):
     # Use Nigeria timezone (WAT = UTC+1)
-    nigeria_time = datetime.now() + datetime.timedelta(hours=1)
+    nigeria_time = datetime.now() + timedelta(hours=1)
     date_now = nigeria_time.strftime("%A, %B %d, %Y, %I:%M %p WAT")
     if report_id is None:
         report_id = generate_report_id()
@@ -3103,21 +3121,30 @@ def show_activation_required_page():
             if activate_system(activation_key):
                 st.success("🎉 System activated successfully!")
                 st.balloons()
-                # Clear any generated key session states
-                if 'generated_activation_key' in st.session_state:
-                    del st.session_state.generated_activation_key
-                if 'generated_for_school' in st.session_state:
-                    del st.session_state.generated_for_school
-                if 'just_generated' in st.session_state:
-                    del st.session_state.just_generated
-                # Clear activation-related session states to force fresh check
-                if 'activation_check_done' in st.session_state:
-                    del st.session_state.activation_check_done
-
+                
+                # Clear ALL session states to force fresh activation check
+                keys_to_clear = [
+                    'generated_activation_key', 'generated_for_school', 'just_generated',
+                    'activation_check_done', 'activation_status', 'activation_data'
+                ]
+                for key in keys_to_clear:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                
+                # Set activation flag in session state to help with fresh check
+                st.session_state.activated = True
+                st.session_state.show_activation = False
+                
+                # Clear any Streamlit caches
+                try:
+                    if hasattr(st, 'cache_data'):
+                        st.cache_data.clear()
+                    if hasattr(st, 'experimental_memo'):
+                        st.experimental_memo.clear()
+                except:
+                    pass  # Ignore cache clear errors
+                
                 st.info("🔄 Redirecting to login page...")
-                # Wait a moment then rerun
-                import time
-                time.sleep(1)
                 st.rerun()
             else:
                 st.error("❌ Invalid activation key. Please check and try again.")
@@ -6036,7 +6063,7 @@ def admin_panel_tab():
             with col1:
                 if st.button("🗑️ Clean Old Audit Logs (>30 days)"):
                     # Implementation for cleaning old logs
-                    cutoff_date = datetime.now() - datetime.timedelta(days=30)
+                    cutoff_date = datetime.now() - timedelta(days=30)
                     st.info(f"Would clean logs older than {cutoff_date.strftime('%Y-%m-%d')}")
 
             with col2:
