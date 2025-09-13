@@ -712,19 +712,7 @@ def decrypt_data(encrypted_data: str, key: bytes) -> str:
     except Exception as e:
         return encrypted_data
 
-def hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
-    return salt + pwd_hash.hex()
-
-def verify_password(password: str, hashed: str) -> bool:
-    try:
-        salt = hashed[:32]
-        stored_hash = hashed[32:]
-        pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
-        return pwd_hash.hex() == stored_hash
-    except:
-        return False
+# Duplicate password functions removed - using the ones at line 71
 
 def create_audit_log(action: str, user_id: str, details: dict, data_type: str = "general"):
     try:
