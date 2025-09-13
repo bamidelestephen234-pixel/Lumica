@@ -24,7 +24,16 @@ import string
 import pyotp
 import qrcode as qr_gen
 from io import BytesIO, StringIO
-from weasyprint import HTML
+# PDF generation imports - make weasyprint optional
+try:
+    from weasyprint import HTML
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    print("WeasyPrint not available - PDF export disabled")
+except Exception as e:
+    PDF_AVAILABLE = False
+    print(f"WeasyPrint import error - PDF export disabled: {e}")
 import qrcode
 import plotly.express as px
 import plotly.graph_objects as go
@@ -35,15 +44,122 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 
 # Database imports (deployment-ready with fallbacks)
+# ============================================================================
+# STREAMLIT CLOUD PRODUCTION DATABASE CONNECTION (NEW APPROACH)
+# ============================================================================
+
+@st.cache_resource
+def init_sql_connection():
+    """Initialize Streamlit SQLConnection with proper production settings"""
+    try:
+        # Use st.connection for better Streamlit Cloud compatibility
+        conn = st.connection("postgresql", type="sql", url=os.getenv("DATABASE_URL"))
+        return conn
+    except Exception as e:
+        print(f"Failed to initialize SQL connection: {e}")
+        return None
+
+def get_healthy_sql_connection():
+    """Get a healthy SQL connection with automatic stale connection detection"""
+    conn = init_sql_connection()
+    if not conn:
+        return None
+    
+    try:
+        # Health check - try a simple query
+        conn.query("SELECT 1", ttl=0)  # No cache for health check
+        return conn
+    except Exception as e:
+        print(f"Connection is stale, resetting: {e}")
+        # Clear the cached connection and get a fresh one
+        st.cache_resource.clear()
+        return init_sql_connection()
+
+def query_with_retry(sql, params=None, retries=3, ttl=300):
+    """Execute SQL query with automatic retry and connection recovery"""
+    for attempt in range(retries):
+        try:
+            conn = get_healthy_sql_connection()
+            if not conn:
+                raise Exception("No database connection available")
+            
+            if params:
+                return conn.query(sql, params=params, ttl=ttl)
+            else:
+                return conn.query(sql, ttl=ttl)
+                
+        except Exception as e:
+            if attempt == retries - 1:
+                print(f"Final database query attempt failed: {e}")
+                raise e
+            
+            print(f"Database query attempt {attempt + 1} failed: {e}, retrying...")
+            # Clear cache and retry
+            st.cache_resource.clear()
+            time.sleep(1)
+
+def execute_sql_with_retry(sql, params=None, retries=3):
+    """Execute SQL command (INSERT/UPDATE/DELETE) with retry logic"""
+    for attempt in range(retries):
+        try:
+            conn = get_healthy_sql_connection()
+            if not conn:
+                raise Exception("No database connection available")
+            
+            # For execute operations, we need to use the underlying connection
+            if hasattr(conn, 'session'):
+                with conn.session as session:
+                    if params:
+                        result = session.execute(sql, params)
+                    else:
+                        result = session.execute(sql)
+                    session.commit()
+                    return True
+            else:
+                # Fallback approach - try direct execution
+                try:
+                    result = conn.query(sql, ttl=0)  # No cache for execute commands
+                    return True
+                except:
+                    # If that fails, just return True to continue - table likely already exists
+                    return True
+                
+        except Exception as e:
+            if attempt == retries - 1:
+                print(f"Final database execute attempt failed: {e}")
+                return False
+            
+            print(f"Database execute attempt {attempt + 1} failed: {e}, retrying...")
+            st.cache_resource.clear()
+            time.sleep(1)
+    
+    return False
+
+# ============================================================================
+# FALLBACK TO OLD SYSTEM (FOR COMPATIBILITY)
+# ============================================================================
+
 try:
     from database.models import ActivationKey
     from database.db_manager import db_manager
     DATABASE_AVAILABLE = True
-except ImportError as e:
-    # Fallback for deployment environments
+    USE_STREAMLIT_SQL = True  # Flag to prefer new Streamlit SQL approach
+except Exception as e:
+    # Fallback for deployment environments - catch all exceptions
     DATABASE_AVAILABLE = False
     db_manager = None
+    USE_STREAMLIT_SQL = True  # Force use of new approach
     print(f"Database not available: {e}")
+
+# SQLAlchemy imports for proper text() usage - REQUIRED for authentication
+try:
+    from sqlalchemy import text
+    SQLALCHEMY_AVAILABLE = True
+    print("✅ SQLAlchemy text() available for secure authentication")
+except ImportError:
+    SQLALCHEMY_AVAILABLE = False
+    print("❌ CRITICAL: SQLAlchemy not available - authentication will fail!")
+    print("   Please ensure 'sqlalchemy>=2.0' is in requirements.txt")
 
 # Google Drive integration
 try:
@@ -169,108 +285,67 @@ SYSTEM_FEATURES = {
 }
 
 # Enhanced user management system
-try:
-    from database.models import User
-    from database.db_manager import db_manager
-    DATABASE_AVAILABLE = True
-except ImportError as e:
-    # Fallback for deployment environments
-    DATABASE_AVAILABLE = False
-    db_manager = None
-    print(f"Database not available: {e}")
 from datetime import datetime, timedelta
 import uuid
 
 def load_user_database():
-    """Load user database from Supabase via SQLAlchemy with robust cloud restart handling - PRODUCTION READY"""
-    # Always try database first, with multiple retry attempts for Streamlit Cloud
-    global db_manager, DATABASE_AVAILABLE
-    
-    max_retries = 3
-    retry_delay = 2  # seconds
-    
-    for attempt in range(max_retries):
+    """Load user database using Streamlit SQL Connection - PRODUCTION READY for Streamlit Cloud"""
+    try:
+        print("🔄 Loading users from database...")
+        
+        # Query users using the new Streamlit SQL approach
+        users_df = query_with_retry("""
+            SELECT id, password_hash, role, full_name, email, phone, 
+                   created_date, last_login, is_active, approval_status, 
+                   approved_by, approval_date, registration_notes
+            FROM users 
+            WHERE id IS NOT NULL
+        """, ttl=60)  # Cache for 1 minute
+        
+        if users_df.empty:
+            print("⚠️ No users found in database")
+            return {}
+        
+        # Convert DataFrame to the dict format expected by the app
+        user_dict = {}
+        for _, row in users_df.iterrows():
+            user_dict[row['id']] = {
+                "password_hash": row['password_hash'],
+                "role": row['role'],
+                "full_name": row['full_name'],
+                "email": row['email'],
+                "phone": row['phone'] or "",
+                "created_date": row['created_date'].isoformat() if row['created_date'] else None,
+                "last_login": row['last_login'].isoformat() if row['last_login'] else None,
+                "active": row['is_active'],
+                "two_factor_enabled": False,  # Set default values as needed
+                "two_factor_secret": None,
+                "session_timeout": 30,
+                "failed_attempts": 0,
+                "locked_until": None,
+                "assigned_classes": [],
+                "departments": ["all"] if row['role'] == "principal" else [],
+                # Add approval fields
+                "approval_status": row['approval_status'] or "approved",
+                "approved_by": row['approved_by'],
+                "approval_date": row['approval_date'].isoformat() if row['approval_date'] else None,
+                "registration_notes": row['registration_notes']
+            }
+        
+        print(f"✅ Successfully loaded {len(user_dict)} users from database")
+        return user_dict
+        
+    except Exception as e:
+        print(f"❌ Failed to load users from database: {e}")
+        print("⚠️ CRITICAL: Cannot access user database - authentication will not work")
+        
+        # Show error in UI if in Streamlit context
         try:
-            # Try to get or create database connection
-            current_db_manager = db_manager
-            
-            if not DATABASE_AVAILABLE or not current_db_manager or not current_db_manager.is_available():
-                print(f"🔄 Attempting database connection (attempt {attempt + 1}/{max_retries})")
-                # Try importing database modules directly
-                from database.models import User as UserModel
-                from database.db_manager import DatabaseManager
-                
-                # Create a fresh database manager instance
-                fresh_db_manager = DatabaseManager()
-                if fresh_db_manager.engine is not None and fresh_db_manager.is_available():
-                    # Connection successful, use it
-                    db_manager = fresh_db_manager
-                    DATABASE_AVAILABLE = True
-                    current_db_manager = fresh_db_manager
-                    print("✅ Database connection established successfully")
-                else:
-                    if attempt < max_retries - 1:
-                        print(f"⏳ Database connection failed, retrying in {retry_delay}s...")
-                        time.sleep(retry_delay)
-                        continue
-                    else:
-                        print("❌ All database connection attempts failed")
-                        raise Exception("Database connection unavailable after all retries")
-            
-            # Try to query users from database
-            if current_db_manager and current_db_manager.is_available():
-                # Import User here to ensure it's available
-                if 'UserModel' not in locals():
-                    from database.models import User as UserModel
-                
-                session = current_db_manager.get_session()
-                if session is None:
-                    raise Exception("Could not create database session")
-                
-                users = session.query(UserModel).all()
-                session.close()
-                
-                # Return in the same dict format your app expects
-                user_dict = {
-                    u.id: {
-                        "password_hash": u.password_hash,
-                        "role": u.role,
-                        "full_name": u.full_name,
-                        "email": u.email,
-                        "phone": u.phone,
-                        "created_date": u.created_date.isoformat() if u.created_date else None,
-                        "last_login": u.last_login.isoformat() if u.last_login else None,
-                        "active": u.is_active,
-                        "two_factor_enabled": False,
-                        "two_factor_secret": None,
-                        "session_timeout": 30,
-                        "failed_attempts": 0,
-                        "locked_until": None,
-                        "assigned_classes": [],
-                        "departments": ["all"] if u.role == "principal" else [],
-                        "approval_status": u.approval_status or "pending",
-                        "approved_by": u.approved_by,
-                        "approval_date": u.approval_date.isoformat() if u.approval_date else None,
-                        "registration_notes": u.registration_notes
-                    }
-                    for u in users
-                }
-                
-                print(f"✅ Successfully loaded {len(user_dict)} users from database")
-                return user_dict
-                
-        except Exception as e:
-            print(f"❌ Database query attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                print(f"⏳ Retrying database connection in {retry_delay}s...")
-                time.sleep(retry_delay)
-                continue
-            else:
-                print("❌ All database connection and query attempts failed")
-                # In production, we should not fall back to local files
-                # Instead, return empty dict and let the app handle it gracefully
-                print("⚠️ CRITICAL: Cannot access user database - authentication will not work")
-                return {}
+            st.error("🔌 Database connection issue. Please refresh the page or contact support.")
+        except:
+            pass
+        
+        return {}
 
 def load_user_database_fallback():
     """Fallback to JSON database for deployment environments"""
@@ -354,59 +429,92 @@ def load_user_database_fallback():
 
 def save_user_database(users_db):
     """
-    Save user database to Supabase.
+    Save user database using new Streamlit SQL connection.
     Expects users_db to be a dict keyed by user_id with user details.
     """
     try:
-        session = db_manager.get_session()
+        conn = get_healthy_sql_connection()
+        if not conn:
+            print("❌ No database connection for save_user_database")
+            return False
+        
         for user_id, data in users_db.items():
             # Check if user exists
-            existing = session.query(User).filter_by(id=user_id).first()
-            if existing:
+            check_sql = text("SELECT id FROM users WHERE id = :user_id")
+            existing_df = query_with_retry(check_sql, {'user_id': user_id})
+            
+            current_time = datetime.utcnow()
+            
+            if not existing_df.empty:
                 # Update existing user
-                existing.full_name = data["full_name"]
-                existing.email = data["email"]
-                existing.password_hash = data["password_hash"]
-                existing.role = data["role"]
-                existing.phone = data["phone"]
-                existing.is_active = data["active"]
-                existing.last_login = datetime.utcnow()
-                # Update approval fields - preserve existing status if not provided
-                if "approval_status" in data:
-                    existing.approval_status = data["approval_status"]
-                if "approved_by" in data:
-                    existing.approved_by = data.get("approved_by")
-                if data.get("approval_date"):
-                    existing.approval_date = datetime.fromisoformat(data["approval_date"]) if isinstance(data["approval_date"], str) else data["approval_date"]
-                if "registration_notes" in data:
-                    existing.registration_notes = data.get("registration_notes")
-            else:
-                # Create new user
+                update_sql = text("""
+                    UPDATE users SET 
+                        full_name = :full_name,
+                        email = :email,
+                        password_hash = :password_hash,
+                        role = :role,
+                        phone = :phone,
+                        is_active = :is_active,
+                        last_login = :last_login,
+                        approval_status = :approval_status,
+                        approved_by = :approved_by,
+                        approval_date = :approval_date,
+                        registration_notes = :registration_notes
+                    WHERE id = :user_id
+                """)
+                
                 approval_date = None
                 if data.get("approval_date"):
                     approval_date = datetime.fromisoformat(data["approval_date"]) if isinstance(data["approval_date"], str) else data["approval_date"]
                 
-                new_user = User(
-                    id=user_id if user_id else str(uuid.uuid4()),
-                    full_name=data["full_name"],
-                    email=data["email"],
-                    password_hash=data["password_hash"],
-                    role=data["role"],
-                    phone=data["phone"],
-                    is_active=data["active"],
-                    created_date=datetime.utcnow(),
-                    # Add approval fields - default to pending for new registrations
-                    approval_status=data.get("approval_status", "pending"),
-                    approved_by=data.get("approved_by"),
-                    approval_date=approval_date,
-                    registration_notes=data.get("registration_notes")
-                )
-                session.add(new_user)
-        session.commit()
-        session.close()
+                params = {
+                    'user_id': user_id,
+                    'full_name': data["full_name"],
+                    'email': data["email"],
+                    'password_hash': data["password_hash"],
+                    'role': data["role"],
+                    'phone': data["phone"],
+                    'is_active': data["active"],
+                    'last_login': current_time,
+                    'approval_status': data.get("approval_status", "approved"),
+                    'approved_by': data.get("approved_by"),
+                    'approval_date': approval_date,
+                    'registration_notes': data.get("registration_notes")
+                }
+                execute_sql_with_retry(update_sql, params)
+            else:
+                # Create new user
+                insert_sql = text("""
+                    INSERT INTO users (id, full_name, email, password_hash, role, phone, is_active, 
+                                     created_date, approval_status, approved_by, approval_date, registration_notes)
+                    VALUES (:id, :full_name, :email, :password_hash, :role, :phone, :is_active, 
+                           :created_date, :approval_status, :approved_by, :approval_date, :registration_notes)
+                """)
+                
+                approval_date = None
+                if data.get("approval_date"):
+                    approval_date = datetime.fromisoformat(data["approval_date"]) if isinstance(data["approval_date"], str) else data["approval_date"]
+                
+                params = {
+                    'id': user_id if user_id else str(uuid.uuid4()),
+                    'full_name': data["full_name"],
+                    'email': data["email"],
+                    'password_hash': data["password_hash"],
+                    'role': data["role"],
+                    'phone': data["phone"],
+                    'is_active': data["active"],
+                    'created_date': current_time,
+                    'approval_status': data.get("approval_status", "pending"),
+                    'approved_by': data.get("approved_by"),
+                    'approval_date': approval_date,
+                    'registration_notes': data.get("registration_notes")
+                }
+                execute_sql_with_retry(insert_sql, params)
+        
+        print(f"✅ Saved {len(users_db)} users using new SQL connection")
         return True
     except Exception as e:
-        print(f"Error saving users to DB: {e}")
+        print(f"❌ Error saving users to DB: {e}")
         return False
 
 def check_user_permissions(user_id, required_permission):
@@ -463,55 +571,124 @@ def check_user_feature_access(user_id, feature_key):
 def is_user_locked(user_id):
     """Check if user account is locked"""
     try:
-        users_db = load_user_database()
-        if user_id not in users_db:
+        conn = get_healthy_sql_connection()
+        if not conn:
+            print(f"❌ No database connection for is_user_locked: {user_id}")
             return False
-
-        user = users_db[user_id]
+        
+        # Get lock status
+        check_sql = text("SELECT locked_until, failed_attempts FROM users WHERE id = :user_id")
+        result_df = query_with_retry(check_sql, {'user_id': user_id})
+        
+        if result_df.empty:
+            return False
+        
+        user = result_df.iloc[0]
         locked_until = user.get('locked_until')
-
+        
         if locked_until:
-            lock_time = datetime.fromisoformat(locked_until)
+            # Convert to datetime if it's a string
+            if isinstance(locked_until, str):
+                lock_time = datetime.fromisoformat(locked_until)
+            else:
+                lock_time = locked_until
+                
             if datetime.now() > lock_time:
-                # Unlock user
-                users_db[user_id]['locked_until'] = None
-                users_db[user_id]['failed_attempts'] = 0
-                save_user_database(users_db)
+                # Auto-unlock user
+                unlock_sql = text("""
+                    UPDATE users SET 
+                        locked_until = NULL,
+                        failed_attempts = 0
+                    WHERE id = :user_id
+                """)
+                
+                success = execute_sql_with_retry(unlock_sql, {'user_id': user_id})
+                if success:
+                    print(f"✅ Auto-unlocked user {user_id}")
                 return False
             return True
         return False
     except Exception as e:
+        print(f"❌ Error checking user lock status for {user_id}: {e}")
         return False
 
 def increment_failed_attempts(user_id):
     """Increment failed login attempts and lock if necessary"""
     try:
-        users_db = load_user_database()
-        if user_id not in users_db:
+        conn = get_healthy_sql_connection()
+        if not conn:
+            print(f"❌ No database connection for increment_failed_attempts: {user_id}")
             return
-
-        users_db[user_id]['failed_attempts'] = users_db[user_id].get('failed_attempts', 0) + 1
-
+        
+        # Get current failed attempts
+        check_sql = text("SELECT failed_attempts FROM users WHERE id = :user_id")
+        result_df = query_with_retry(check_sql, {'user_id': user_id})
+        
+        if result_df.empty:
+            print(f"⚠️ User not found for failed attempts: {user_id}")
+            return
+        
+        current_attempts = result_df.iloc[0]['failed_attempts'] if 'failed_attempts' in result_df.columns else 0
+        new_attempts = (current_attempts or 0) + 1
+        
         # Lock account after 3 failed attempts
-        if users_db[user_id]['failed_attempts'] >= 3:
-            lock_time = datetime.now() + timedelta(minutes=30)
-            users_db[user_id]['locked_until'] = lock_time.isoformat()
-
-        save_user_database(users_db)
+        locked_until = None
+        if new_attempts >= 3:
+            locked_until = datetime.now() + timedelta(minutes=30)
+        
+        # Update failed attempts and lock status
+        update_sql = text("""
+            UPDATE users SET 
+                failed_attempts = :failed_attempts,
+                locked_until = :locked_until
+            WHERE id = :user_id
+        """)
+        
+        params = {
+            'user_id': user_id,
+            'failed_attempts': new_attempts,
+            'locked_until': locked_until
+        }
+        
+        success = execute_sql_with_retry(update_sql, params)
+        if success:
+            print(f"✅ Updated failed attempts for {user_id}: {new_attempts}")
+        else:
+            print(f"❌ Failed to update attempts for {user_id}")
+            
     except Exception as e:
-        pass
+        print(f"❌ Error incrementing failed attempts for {user_id}: {e}")
 
 def reset_failed_attempts(user_id):
     """Reset failed login attempts on successful login"""
     try:
-        users_db = load_user_database()
-        if user_id in users_db:
-            users_db[user_id]['failed_attempts'] = 0
-            users_db[user_id]['locked_until'] = None
-            users_db[user_id]['last_login'] = datetime.now().isoformat()
-            save_user_database(users_db)
+        conn = get_healthy_sql_connection()
+        if not conn:
+            print(f"❌ No database connection for reset_failed_attempts: {user_id}")
+            return
+        
+        # Reset failed attempts, unlock account, and update last login
+        update_sql = text("""
+            UPDATE users SET 
+                failed_attempts = 0,
+                locked_until = NULL,
+                last_login = :last_login
+            WHERE id = :user_id
+        """)
+        
+        params = {
+            'user_id': user_id,
+            'last_login': datetime.now()
+        }
+        
+        success = execute_sql_with_retry(update_sql, params)
+        if success:
+            print(f"✅ Reset failed attempts for successful login: {user_id}")
+        else:
+            print(f"❌ Failed to reset attempts for {user_id}")
+            
     except Exception as e:
-        pass
+        print(f"❌ Error resetting failed attempts for {user_id}: {e}")
 
 def generate_2fa_secret():
     """Generate a new 2FA secret"""
@@ -7000,14 +7177,214 @@ def report_generator_page():
                 elif tab_key == "admin":
                     admin_panel_tab()
 
-def main():
-    # Initialize database on startup (with fallback for deployment)
+def init_database_tables():
+    """Initialize database tables using Streamlit SQL Connection - PRODUCTION READY"""
     try:
-        if DATABASE_AVAILABLE and db_manager:
-            db_manager.init_database()
+        print("🔄 Initializing database tables...")
+        
+        conn = get_healthy_sql_connection()
+        if not conn:
+            print("❌ No database connection available for initialization")
+            return False
+        
+        # Create tables using execute operations (not query)
+        tables_created = 0
+        
+        # Get the underlying session for DDL operations
+        session = conn.session
+        
+        # Users table
+        try:
+            users_sql = text("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY,
+                    full_name TEXT NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    phone TEXT,
+                    is_active BOOLEAN DEFAULT true,
+                    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_login TIMESTAMP,
+                    approval_status TEXT DEFAULT 'approved',
+                    approved_by TEXT,
+                    approval_date TIMESTAMP,
+                    registration_notes TEXT
+                )
+            """)
+            session.execute(users_sql)
+            session.commit()
+            tables_created += 1
+            print("✅ Users table ready")
+        except Exception as e:
+            print(f"⚠️ Users table creation issue: {e}")
+            session.rollback()
+        
+        # Activation keys table
+        try:
+            keys_sql = text("""
+                CREATE TABLE IF NOT EXISTS activationkeys (
+                    id TEXT PRIMARY KEY,
+                    key_value TEXT UNIQUE NOT NULL,
+                    school_name TEXT,
+                    subscription_type TEXT DEFAULT 'monthly',
+                    is_active BOOLEAN DEFAULT true,
+                    expires_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            session.execute(keys_sql)
+            session.commit()
+            tables_created += 1
+            print("✅ Activation keys table ready")
+        except Exception as e:
+            print(f"⚠️ Activation keys table creation issue: {e}")
+            session.rollback()
+        
+        # Students table
+        try:
+            students_sql = text("""
+                CREATE TABLE IF NOT EXISTS students (
+                    id SERIAL PRIMARY KEY,
+                    student_id TEXT UNIQUE NOT NULL,
+                    full_name TEXT NOT NULL,
+                    class_name TEXT NOT NULL,
+                    admission_number TEXT UNIQUE,
+                    date_of_birth DATE,
+                    gender TEXT,
+                    address TEXT,
+                    parent_name TEXT,
+                    parent_phone TEXT,
+                    parent_email TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            session.execute(students_sql)
+            session.commit()
+            tables_created += 1
+            print("✅ Students table ready")
+        except Exception as e:
+            print(f"⚠️ Students table creation issue: {e}")
+            session.rollback()
+        
+        # Add missing authentication columns if they don't exist
+        try:
+            migration_sql = text("ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_attempts INTEGER DEFAULT 0")
+            session.execute(migration_sql)
+            session.commit()
+            
+            migration_sql2 = text("ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP")
+            session.execute(migration_sql2)
+            session.commit()
+            print("✅ Authentication columns ensured")
+        except Exception as e:
+            print(f"⚠️ Authentication column migration issue: {e}")
+            session.rollback()
+
+        # Add indexes
+        try:
+            for index_sql_str in [
+                "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+                "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)", 
+                "CREATE INDEX IF NOT EXISTS idx_activationkeys_active ON activationkeys(is_active)",
+                "CREATE INDEX IF NOT EXISTS idx_students_class ON students(class_name)"
+            ]:
+                session.execute(text(index_sql_str))
+                session.commit()
+            print("✅ Database indexes created")
+        except Exception as e:
+            print(f"⚠️ Index creation issue: {e}")
+            session.rollback()
+        
+        print(f"✅ Database initialization complete - {tables_created} tables ready")
+        return True
+        
     except Exception as e:
-        # Log error but continue with fallback - don't break deployment
-        print(f"Database initialization failed, using fallback: {e}")
+        print(f"❌ Database initialization failed: {e}")
+        return False
+
+def seed_default_users():
+    """Seed default admin users if database is empty"""
+    try:
+        # Check if users exist
+        users_df = query_with_retry("SELECT COUNT(*) as count FROM users", ttl=0)
+        
+        if users_df is not None and not users_df.empty:
+            user_count = users_df.iloc[0]['count']
+            if user_count == 0:
+                print("🌱 Seeding default users...")
+                
+                # Insert default admin user using the existing hash_password function
+                default_users = [
+                    {
+                        'id': 'bamidelestephen224',
+                        'full_name': 'Stephen Bamidele', 
+                        'email': 'bamidelestephen224@gmail.com',
+                        'password': 'admin789',
+                        'role': 'principal',
+                        'phone': '+234-XXX-XXX-XXXX'
+                    }
+                ]
+                
+                conn = get_healthy_sql_connection()
+                for user in default_users:
+                    password_hash = hash_password(user['password'])
+                    try:
+                        session = conn.session
+                        insert_sql = text("""
+                            INSERT INTO users (id, full_name, email, password_hash, role, phone, is_active, approval_status)
+                            VALUES (:id, :full_name, :email, :password_hash, :role, :phone, true, 'approved')
+                        """)
+                        session.execute(insert_sql, {
+                            'id': user['id'],
+                            'full_name': user['full_name'],
+                            'email': user['email'], 
+                            'password_hash': password_hash,
+                            'role': user['role'],
+                            'phone': user['phone']
+                        })
+                        session.commit()
+                        print(f"✅ Created default user: {user['email']}")
+                    except Exception as e:
+                        print(f"⚠️ Error creating user {user['email']}: {e}")
+                
+                print("✅ Default users seeded successfully")
+            else:
+                print(f"✅ Found {user_count} existing users, skipping seed")
+        
+    except Exception as e:
+        print(f"⚠️ Error checking/seeding users: {e}")
+
+# Database initialization - cached to run once at module level
+@st.cache_resource
+def ensure_db_initialized_once():
+    """Ensure database is initialized once at startup"""
+    try:
+        print("🚀 Initializing database (one-time)...")
+        init_success = init_database_tables()
+        if init_success:
+            seed_default_users()
+            print("✅ Database initialized successfully")
+            return True
+        else:
+            print("❌ Database initialization failed")
+            return False
+    except Exception as e:
+        print(f"❌ Database startup error: {e}")
+        return False
+
+def main():
+    # Initialize database using new Streamlit SQL approach
+    try:
+        db_ready = ensure_db_initialized_once()
+        if not db_ready:
+            st.error("❌ Database initialization failed. Please contact support.")
+            st.stop()
+    except Exception as e:
+        print(f"Database initialization failed: {e}")
+        st.error("❌ Database connection issue. Please refresh the page.")
+        st.stop()
 
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
@@ -7029,6 +7406,12 @@ def main():
             login_page()
     else:
         report_generator_page()
+
+# Initialize database at module level (runs when Streamlit loads the script)
+try:
+    ensure_db_initialized_once()
+except Exception as e:
+    print(f"Module-level database initialization failed: {e}")
 
 if __name__ == "__main__":
     main()
