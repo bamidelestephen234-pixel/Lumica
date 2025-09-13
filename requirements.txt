@@ -9,3 +9,14 @@ cryptography
 psycopg2-binary   
 python-dotenv      
 sqlalchemy>=2.0
+cryptography
+numpy
+pandas
+plotly
+psycopg2-binary
+pyotp
+python-dotenv
+qrcode
+sqlalchemy
+streamlit
+weasyprint
