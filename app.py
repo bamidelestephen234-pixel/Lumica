@@ -208,7 +208,12 @@ def load_user_database():
                 "failed_attempts": 0,
                 "locked_until": None,
                 "assigned_classes": [],
-                "departments": ["all"] if u.role == "principal" else []
+                "departments": ["all"] if u.role == "principal" else [],
+                # Add approval fields - never default to approved for security
+                "approval_status": u.approval_status or "pending",
+                "approved_by": u.approved_by,
+                "approval_date": u.approval_date.isoformat() if u.approval_date else None,
+                "registration_notes": u.registration_notes
             }
             for u in users
         }
@@ -240,7 +245,12 @@ def load_user_database_fallback():
                     "failed_attempts": 0,
                     "locked_until": None,
                     "assigned_classes": [],
-                    "departments": ["all"]
+                    "departments": ["all"],
+                    # Add approval fields
+                    "approval_status": "approved",
+                    "approved_by": None,
+                    "approval_date": None,
+                    "registration_notes": None
                 },
                 "teacher_bola": {
                     "password_hash": hash_password("secret123"),
@@ -257,7 +267,12 @@ def load_user_database_fallback():
                     "failed_attempts": 0,
                     "locked_until": None,
                     "assigned_classes": [],
-                    "departments": []
+                    "departments": [],
+                    # Add approval fields
+                    "approval_status": "approved",
+                    "approved_by": None,
+                    "approval_date": None,
+                    "registration_notes": None
                 },
                 "school_ict": {
                     "password_hash": hash_password("akins1111"),
@@ -274,7 +289,12 @@ def load_user_database_fallback():
                     "failed_attempts": 0,
                     "locked_until": None,
                     "assigned_classes": [],
-                    "departments": ["all"]
+                    "departments": ["all"],
+                    # Add approval fields
+                    "approval_status": "approved",
+                    "approved_by": None,
+                    "approval_date": None,
+                    "registration_notes": None
                 }
             }
     except Exception as e:
@@ -300,8 +320,21 @@ def save_user_database(users_db):
                 existing.phone = data["phone"]
                 existing.is_active = data["active"]
                 existing.last_login = datetime.utcnow()
+                # Update approval fields - preserve existing status if not provided
+                if "approval_status" in data:
+                    existing.approval_status = data["approval_status"]
+                if "approved_by" in data:
+                    existing.approved_by = data.get("approved_by")
+                if data.get("approval_date"):
+                    existing.approval_date = datetime.fromisoformat(data["approval_date"]) if isinstance(data["approval_date"], str) else data["approval_date"]
+                if "registration_notes" in data:
+                    existing.registration_notes = data.get("registration_notes")
             else:
                 # Create new user
+                approval_date = None
+                if data.get("approval_date"):
+                    approval_date = datetime.fromisoformat(data["approval_date"]) if isinstance(data["approval_date"], str) else data["approval_date"]
+                
                 new_user = User(
                     id=user_id if user_id else str(uuid.uuid4()),
                     full_name=data["full_name"],
@@ -310,7 +343,12 @@ def save_user_database(users_db):
                     role=data["role"],
                     phone=data["phone"],
                     is_active=data["active"],
-                    created_date=datetime.utcnow()
+                    created_date=datetime.utcnow(),
+                    # Add approval fields - default to pending for new registrations
+                    approval_status=data.get("approval_status", "pending"),
+                    approved_by=data.get("approved_by"),
+                    approval_date=approval_date,
+                    registration_notes=data.get("registration_notes")
                 )
                 session.add(new_user)
         session.commit()
@@ -641,7 +679,7 @@ def export_student_data(student_id=None, gdpr_compliant=True):
     except Exception as e:
         return None, f"Export failed: {str(e)}"
 
-credentials = load_user_database()
+# Removed stale credentials cache - always load fresh user data for security
 
 def generate_encryption_key(password: str, salt: bytes = None) -> bytes:
     if salt is None:
@@ -1736,7 +1774,7 @@ def save_activation_config(config):
         return False
 
 def check_activation_status():
-    """Check if the system is activated"""
+    """Check if the system is activated by querying Supabase directly"""
     try:
         config = load_activation_config()
 
@@ -1749,41 +1787,54 @@ def check_activation_status():
                 return True, {"status": "developer_bypass", "user": "teacher_bamstep"}, None
             return False, {"status": "activation_disabled"}, None
 
-        if os.path.exists("activation_status.json"):
-            with open("activation_status.json", 'r') as f:
-                status = json.load(f)
-
-                # Check if the activation key is deactivated
-                activation_key = status.get('activation_key')
-                if activation_key and is_activation_key_deactivated(activation_key):
-                    return False, {"status": "key_deactivated", "activation_key": activation_key}, None
-
-                # Check if the status indicates activation
-                if status.get('activated', False):
-                    activation_date = status.get('activation_date')
-                    if activation_date:
-                        activation_dt = datetime.fromisoformat(activation_date)
-
-                        # Check if subscription is still valid
-                        if status.get('subscription_type') == 'monthly':
-                            expiry = activation_dt + timedelta(days=30)
-                        elif status.get('subscription_type') == 'yearly':
-                            expiry = activation_dt + timedelta(days=365)
-                        else:
-                            expiry = activation_dt + timedelta(days=30)
-
+        # Query Supabase directly for active keys instead of using local files
+        if DATABASE_AVAILABLE and db_manager:
+            try:
+                session = db_manager.get_session()
+                active_key = session.query(ActivationKey).filter_by(is_active=True).first()
+                session.close()
+                
+                if active_key:
+                    # Check if the key has expired
+                    if active_key.expires_at and active_key.expires_at < datetime.utcnow():
+                        return False, {"status": "key_expired", "activation_key": active_key.key_value}, active_key.expires_at
+                    
+                    # Key is active and not expired
+                    expiry_date = active_key.expires_at
+                    if expiry_date:
+                        # Add grace period if close to expiry
                         grace_period = config.get('grace_period_days', 7)
-                        grace_expiry = expiry + timedelta(days=grace_period)
-
-                        if datetime.now() <= grace_expiry:
-                            return True, status, expiry
+                        grace_expiry = expiry_date + timedelta(days=grace_period)
+                        
+                        if datetime.utcnow() <= grace_expiry:
+                            status = {
+                                "activated": True,
+                                "activation_key": active_key.key_value,
+                                "subscription_type": active_key.subscription_type,
+                                "school_name": active_key.school_name,
+                                "expires_at": expiry_date.isoformat() if expiry_date else None
+                            }
+                            return True, status, expiry_date
                         else:
-                            return False, status, expiry
+                            return False, {"status": "expired", "activation_key": active_key.key_value}, expiry_date
+                    else:
+                        # No expiry date, key is perpetual
+                        status = {
+                            "activated": True,
+                            "activation_key": active_key.key_value,
+                            "subscription_type": active_key.subscription_type,
+                            "school_name": active_key.school_name,
+                            "expires_at": None
+                        }
+                        return True, status, None
+                        
+            except Exception as e:
+                print(f"Error querying activation keys from DB: {e}")
 
-        # Check trial period only if activation is enabled
+        # Fallback: Check trial period only if activation is enabled and no active keys found
         trial_days = config.get('trial_period_days', 30)
-
-        # Use creation date of users_database.json as trial start
+        
+        # Use creation date of users_database.json as trial start for fallback
         if os.path.exists("users_database.json"):
             stat = os.stat("users_database.json")
             creation_time = datetime.fromtimestamp(stat.st_ctime)
@@ -1798,8 +1849,19 @@ def check_activation_status():
         return False, {}, None  # Default to not activated if there's an error
 
 def is_activation_key_deactivated(activation_key):
-    """Check if an activation key has been deactivated"""
+    """Check if an activation key has been deactivated by querying Supabase directly"""
     try:
+        if DATABASE_AVAILABLE and db_manager:
+            session = db_manager.get_session()
+            key = session.query(ActivationKey).filter_by(key_value=activation_key).first()
+            session.close()
+            
+            if key:
+                return not key.is_active  # Return True if key is deactivated (is_active = False)
+            else:
+                return True  # If key doesn't exist, consider it deactivated
+        
+        # Fallback to local file if database not available
         if os.path.exists("activation_records.json"):
             with open("activation_records.json", 'r') as f:
                 records = json.load(f)
@@ -2751,7 +2813,129 @@ def login_page():
                 else:
                     st.error("🚨 Subscription expired - Grace period active")
 
-    staff_login_form()
+    # Create tabs for login and teacher registration
+    login_tab, register_tab = st.tabs(["🔐 Staff Login", "👨‍🏫 Teacher Registration"])
+    
+    with login_tab:
+        staff_login_form()
+    
+    with register_tab:
+        teacher_registration_form()
+
+def teacher_registration_form():
+    """Teacher self-registration form - requires approval from principal/admin"""
+    with st.container():
+        st.markdown("### 👨‍🏫 Teacher Registration")
+        st.markdown("Register as a teacher. Your account will require approval from the principal or administrator.")
+        
+        with st.form("teacher_registration_form"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                reg_full_name = st.text_input("Full Name*", placeholder="John Doe")
+                reg_email = st.text_input("Email Address*", placeholder="teacher@example.com")
+                reg_phone = st.text_input("Phone Number", placeholder="+234 800 123 4567")
+                reg_password = st.text_input("Password*", type="password", placeholder="Enter secure password")
+            
+            with col2:
+                reg_user_id = st.text_input("Desired User ID*", placeholder="teacher_john")
+                reg_confirm_password = st.text_input("Confirm Password*", type="password", placeholder="Confirm your password")
+                reg_subjects = st.multiselect("Subjects You Teach", subjects, help="Select subjects you are qualified to teach")
+                reg_classes = st.multiselect("Preferred Classes", 
+                    ["SS1A", "SS1B", "SS1C", "SS2A", "SS2B", "SS2C", "SS3A", "SS3B", "SS3C",
+                     "JSS1A", "JSS1B", "JSS1C", "JSS2A", "JSS2B", "JSS2C", "JSS3A", "JSS3B", "JSS3C"],
+                    help="Select classes you'd prefer to teach")
+            
+            reg_notes = st.text_area("Additional Information", 
+                placeholder="Brief note about your teaching experience, qualifications, etc.",
+                help="This information will help administrators evaluate your application")
+            
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col2:
+                if st.form_submit_button("📝 Submit Registration", use_container_width=True):
+                    # Validation
+                    errors = []
+                    if not reg_full_name:
+                        errors.append("Full name is required")
+                    if not reg_email:
+                        errors.append("Email address is required")
+                    if not reg_user_id:
+                        errors.append("User ID is required")
+                    if not reg_password:
+                        errors.append("Password is required")
+                    if reg_password != reg_confirm_password:
+                        errors.append("Passwords do not match")
+                    if len(reg_password) < 6:
+                        errors.append("Password must be at least 6 characters long")
+                    
+                    # Check if user ID or email already exists
+                    users_db = load_user_database()
+                    if reg_user_id in users_db:
+                        errors.append("User ID already exists")
+                    
+                    # Check if email already exists
+                    for user_id, user_data in users_db.items():
+                        if user_data.get('email', '').lower() == reg_email.lower():
+                            errors.append("Email address already registered")
+                            break
+                    
+                    if errors:
+                        for error in errors:
+                            st.error(f"❌ {error}")
+                    else:
+                        # Create pending teacher account
+                        try:
+                            new_teacher = {
+                                "password_hash": hash_password(reg_password),
+                                "role": "teacher",
+                                "full_name": reg_full_name,
+                                "email": reg_email,
+                                "phone": reg_phone,
+                                "created_date": datetime.now().isoformat(),
+                                "last_login": None,
+                                "active": False,  # Inactive until approved
+                                "two_factor_enabled": False,
+                                "two_factor_secret": None,
+                                "session_timeout": 30,
+                                "failed_attempts": 0,
+                                "locked_until": None,
+                                "assigned_classes": reg_classes,
+                                "departments": [],
+                                "custom_features": USER_ROLES["teacher"].get('default_features', []),
+                                # New approval fields
+                                "approval_status": "pending",
+                                "approved_by": None,
+                                "approval_date": None,
+                                "registration_notes": reg_notes,
+                                "subjects": reg_subjects
+                            }
+                            
+                            users_db[reg_user_id] = new_teacher
+                            
+                            if save_user_database(users_db):
+                                st.success("✅ Registration submitted successfully!")
+                                st.info("""
+                                **Next Steps:**
+                                - Your registration has been submitted for approval
+                                - A principal or administrator will review your application
+                                - You will be notified once your account is approved
+                                - Check back here or contact the school administration for updates
+                                """)
+                                
+                                log_teacher_activity("system", "teacher_registration", {
+                                    "registered_user": reg_user_id,
+                                    "full_name": reg_full_name,
+                                    "email": reg_email,
+                                    "timestamp": datetime.now().isoformat(),
+                                    "status": "pending_approval"
+                                })
+                                
+                                # Clear form
+                                st.rerun()
+                            else:
+                                st.error("❌ Registration failed. Please try again or contact administrator.")
+                        except Exception as e:
+                            st.error(f"❌ Registration error: {str(e)}")
 
 def show_activation_required_page():
     """Show activation required page with payment instructions"""
@@ -3213,28 +3397,44 @@ def show_activation_required_page():
     """)
 
 def staff_login_form():
-    """Staff login form with enhanced security"""
+    """Staff login form with enhanced security - supports both User ID and Email login"""
     with st.container():
         st.markdown("### Staff Access Portal")
         st.markdown("Please enter your credentials to access the school management system.")
 
-        user_id = st.text_input("User ID", placeholder="Enter your user ID")
+        user_input = st.text_input("User ID or Email", placeholder="Enter your user ID or email address")
         password = st.text_input("Password", type="password", placeholder="Enter your password")
 
-        # Check if user account is locked
-        if user_id and is_user_locked(user_id):
-            st.error("🔒 Account temporarily locked due to multiple failed attempts. Please try again later.")
-            return
+        # Find user by ID or email
+        def find_user_by_id_or_email(user_input, users_db):
+            """Find user by either ID or email"""
+            # First, try to find by user ID
+            if user_input in users_db:
+                return user_input, users_db[user_input]
+            
+            # If not found by ID, search by email
+            for user_id, user_data in users_db.items():
+                if user_data.get('email', '').lower() == user_input.lower():
+                    return user_id, user_data
+            
+            return None, None
+
+        # Check if user account is locked (try to find user first)
+        if user_input:
+            users_db = load_user_database()
+            found_user_id, found_user = find_user_by_id_or_email(user_input, users_db)
+            if found_user_id and is_user_locked(found_user_id):
+                st.error("🔒 Account temporarily locked due to multiple failed attempts. Please try again later.")
+                return
 
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
             if st.button("🚀 Login", width='stretch'):
-                if user_id and password:
+                if user_input and password:
                     users_db = load_user_database()
+                    found_user_id, user = find_user_by_id_or_email(user_input, users_db)
 
-                    if user_id in users_db:
-                        user = users_db[user_id]
-
+                    if found_user_id and user:
                         # Check if user is active
                         if not user.get('active', True):
                             st.error("❌ Account is disabled. Contact administrator.")
@@ -3242,31 +3442,59 @@ def staff_login_form():
 
                         # Verify password
                         if verify_password(password, user['password_hash']):
+                            # Check approval status for teacher accounts
+                            approval_status = user.get('approval_status', 'approved')
+                            if approval_status == 'pending':
+                                st.warning("⏳ **Account Pending Approval**")
+                                st.info("""
+                                Your teacher registration is currently pending approval from the school administration.
+                                
+                                **What happens next:**
+                                - The principal or administrator will review your application
+                                - You'll be notified once your account is approved
+                                - Contact the school administration if you need updates
+                                
+                                **Need help?** Contact the school office for assistance.
+                                """)
+                                return
+                            elif approval_status == 'rejected':
+                                rejection_reason = user.get('rejection_reason', 'No reason provided')
+                                st.error("❌ **Account Application Rejected**")
+                                st.info(f"""
+                                Your teacher registration was not approved by the administration.
+                                
+                                **Reason:** {rejection_reason}
+                                
+                                Please contact the school administration for more information or to reapply.
+                                """)
+                                return
+                            
                             # Check 2FA if enabled
                             if user.get('two_factor_enabled', False):
-                                st.session_state.pending_2fa = user_id
+                                st.session_state.pending_2fa = found_user_id
                                 st.session_state.pending_2fa_secret = user.get('two_factor_secret')
                                 st.rerun()
                             else:
                                 # Complete login
-                                complete_login(user_id, user)
+                                complete_login(found_user_id, user)
                         else:
-                            increment_failed_attempts(user_id)
-                            log_teacher_activity(user_id, "failed_login", {
-                                "attempted_user_id": user_id,
+                            increment_failed_attempts(found_user_id)
+                            log_teacher_activity(found_user_id, "failed_login", {
+                                "attempted_user_id": user_input,
+                                "actual_user_id": found_user_id,
                                 "timestamp": datetime.now().isoformat(),
                                 "reason": "invalid_password"
                             })
                             st.error("❌ Invalid credentials. Please try again.")
                     else:
-                        log_teacher_activity(user_id or "unknown", "failed_login", {
-                            "attempted_user_id": user_id,
+                        log_teacher_activity(user_input or "unknown", "failed_login", {
+                            "attempted_user_input": user_input,
                             "timestamp": datetime.now().isoformat(),
                             "reason": "user_not_found"
                         })
                         st.error("❌ Invalid credentials. Please try again.")
                 else:
-                    st.warning("⚠️ Please enter both User ID and Password.")
+                    st.warning("⚠️ Please enter both User ID/Email and Password.")
 
 
 
@@ -4406,6 +4634,103 @@ def admin_panel_tab():
                             st.error("❌ User ID already exists")
                     else:
                         st.error("❌ Please fill in all required fields")
+
+        # Load users database for pending approvals
+        users_db = load_user_database()
+        
+        # Pending Teacher Approvals
+        pending_teachers = {user_id: user for user_id, user in users_db.items() 
+                          if user.get('approval_status') == 'pending'}
+        
+        if pending_teachers:
+            with st.expander(f"⏳ Pending Teacher Approvals ({len(pending_teachers)})", expanded=True):
+                st.markdown("**Teachers awaiting approval:**")
+                
+                for user_id, teacher in pending_teachers.items():
+                    with st.container():
+                        st.markdown("---")
+                        col1, col2, col3 = st.columns([3, 1, 1])
+                        
+                        with col1:
+                            st.write(f"**👨‍🏫 {teacher.get('full_name', 'Unknown')}**")
+                            st.write(f"📧 {teacher.get('email', 'No email')}")
+                            st.write(f"📱 {teacher.get('phone', 'No phone')}")
+                            st.write(f"📅 Applied: {teacher.get('created_date', 'Unknown')}")
+                            
+                            # Show subjects and classes
+                            subjects_list = teacher.get('subjects', [])
+                            classes_list = teacher.get('assigned_classes', [])
+                            if subjects_list:
+                                st.write(f"📚 Subjects: {', '.join(subjects_list)}")
+                            if classes_list:
+                                st.write(f"🏫 Preferred Classes: {', '.join(classes_list)}")
+                            
+                            # Show registration notes
+                            notes = teacher.get('registration_notes', '')
+                            if notes:
+                                st.write(f"📝 Notes: {notes}")
+                        
+                        with col2:
+                            if st.button("✅ Approve", key=f"approve_{user_id}", type="primary"):
+                                # Approve the teacher
+                                users_db[user_id]['approval_status'] = 'approved'
+                                users_db[user_id]['approved_by'] = st.session_state.teacher_id
+                                users_db[user_id]['approval_date'] = datetime.now().isoformat()
+                                users_db[user_id]['active'] = True  # Activate account
+                                
+                                if save_user_database(users_db):
+                                    st.success(f"✅ Teacher {teacher.get('full_name')} approved!")
+                                    log_teacher_activity(st.session_state.teacher_id, "teacher_approved", {
+                                        "approved_user": user_id,
+                                        "teacher_name": teacher.get('full_name'),
+                                        "approved_by": st.session_state.teacher_id,
+                                        "timestamp": datetime.now().isoformat()
+                                    })
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Error approving teacher")
+                        
+                        with col3:
+                            if st.button("❌ Reject", key=f"reject_{user_id}", type="secondary"):
+                                # Show rejection reason dialog
+                                st.session_state[f'show_reject_reason_{user_id}'] = True
+                                st.rerun()
+                        
+                        # Handle rejection reason dialog
+                        if st.session_state.get(f'show_reject_reason_{user_id}', False):
+                            with st.form(f"reject_form_{user_id}"):
+                                st.write("**Reason for rejection:**")
+                                reject_reason = st.text_area("Rejection Reason", 
+                                    placeholder="Please provide a reason for rejection")
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    if st.form_submit_button("❌ Confirm Rejection"):
+                                        users_db[user_id]['approval_status'] = 'rejected'
+                                        users_db[user_id]['approved_by'] = st.session_state.teacher_id
+                                        users_db[user_id]['approval_date'] = datetime.now().isoformat()
+                                        users_db[user_id]['rejection_reason'] = reject_reason
+                                        
+                                        if save_user_database(users_db):
+                                            st.success(f"Teacher {teacher.get('full_name')} application rejected.")
+                                            log_teacher_activity(st.session_state.teacher_id, "teacher_rejected", {
+                                                "rejected_user": user_id,
+                                                "teacher_name": teacher.get('full_name'),
+                                                "rejected_by": st.session_state.teacher_id,
+                                                "reason": reject_reason,
+                                                "timestamp": datetime.now().isoformat()
+                                            })
+                                            st.session_state[f'show_reject_reason_{user_id}'] = False
+                                            st.rerun()
+                                        else:
+                                            st.error("❌ Error rejecting teacher")
+                                
+                                with col2:
+                                    if st.form_submit_button("Cancel"):
+                                        st.session_state[f'show_reject_reason_{user_id}'] = False
+                                        st.rerun()
+        else:
+            st.info("✅ No pending teacher approvals")
 
         # Manage existing users
         st.markdown("### 📋 Existing Users")
