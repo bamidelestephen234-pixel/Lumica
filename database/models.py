@@ -17,6 +17,12 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     created_date = Column(DateTime, default=datetime.utcnow)
     last_login = Column(DateTime)
+    
+    # Teacher approval fields
+    approval_status = Column(String, default="approved")  # 'pending', 'approved', 'rejected'
+    approved_by = Column(String, nullable=True)  # User ID who approved
+    approval_date = Column(DateTime, nullable=True)  # When approved
+    registration_notes = Column(Text, nullable=True)  # Notes from teacher during registration
 
 class Student(Base):
     __tablename__ = "students"
