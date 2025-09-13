@@ -182,71 +182,95 @@ from datetime import datetime, timedelta
 import uuid
 
 def load_user_database():
-    """Load user database from Supabase via SQLAlchemy with robust cloud restart handling"""
-    # Always try database first, even if initial connection seemed to fail
-    # This handles Streamlit Cloud restart scenarios where DATABASE_AVAILABLE 
-    # might be False due to initialization timing issues
-    
-    # Try to reinitialize database connection if it failed before
+    """Load user database from Supabase via SQLAlchemy with robust cloud restart handling - PRODUCTION READY"""
+    # Always try database first, with multiple retry attempts for Streamlit Cloud
     global db_manager, DATABASE_AVAILABLE
     
-    if not DATABASE_AVAILABLE or not db_manager:
-        try:
-            # Try importing database modules directly (they might work now)
-            from database.models import User as UserModel
-            from database.db_manager import DatabaseManager
-            
-            # Create a fresh database manager instance
-            fresh_db_manager = DatabaseManager()
-            if fresh_db_manager.engine is not None:
-                # Connection successful, use it
-                db_manager = fresh_db_manager
-                DATABASE_AVAILABLE = True
-                print("✅ Database connection recovered after restart")
-            else:
-                print("❌ Fresh database connection also failed, using fallback")
-                return load_user_database_fallback()
-        except Exception as e:
-            print(f"❌ Could not recover database connection: {e}")
-            return load_user_database_fallback()
+    max_retries = 3
+    retry_delay = 2  # seconds
     
-    try:
-        # Import User here to ensure it's available
-        if 'UserModel' not in locals():
-            from database.models import User as UserModel
-        
-        session = db_manager.get_session()
-        users = session.query(UserModel).all()
-        session.close()
-        # Return in the same dict format your app expects
-        return {
-            u.id: {
-                "password_hash": u.password_hash,
-                "role": u.role,
-                "full_name": u.full_name,
-                "email": u.email,
-                "phone": u.phone,
-                "created_date": u.created_date.isoformat() if u.created_date else None,
-                "last_login": u.last_login.isoformat() if u.last_login else None,
-                "active": u.is_active,
-                "two_factor_enabled": False,
-                "two_factor_secret": None,
-                "session_timeout": 30,
-                "failed_attempts": 0,
-                "locked_until": None,
-                "assigned_classes": [],
-                "departments": ["all"] if u.role == "principal" else [],
-                # Add approval fields - never default to approved for security
-                "approval_status": u.approval_status or "pending",
-                "approved_by": u.approved_by,
-                "approval_date": u.approval_date.isoformat() if u.approval_date else None,
-                "registration_notes": u.registration_notes
-            }
-            for u in users
-        }
-    except Exception as e:
-        print(f"Error loading users from DB: {e}")
-        return load_user_database_fallback()
+    for attempt in range(max_retries):
+        try:
+            # Try to get or create database connection
+            current_db_manager = db_manager
+            
+            if not DATABASE_AVAILABLE or not current_db_manager or not current_db_manager.is_available():
+                print(f"🔄 Attempting database connection (attempt {attempt + 1}/{max_retries})")
+                # Try importing database modules directly
+                from database.models import User as UserModel
+                from database.db_manager import DatabaseManager
+                
+                # Create a fresh database manager instance
+                fresh_db_manager = DatabaseManager()
+                if fresh_db_manager.engine is not None and fresh_db_manager.is_available():
+                    # Connection successful, use it
+                    db_manager = fresh_db_manager
+                    DATABASE_AVAILABLE = True
+                    current_db_manager = fresh_db_manager
+                    print("✅ Database connection established successfully")
+                else:
+                    if attempt < max_retries - 1:
+                        print(f"⏳ Database connection failed, retrying in {retry_delay}s...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        print("❌ All database connection attempts failed")
+                        raise Exception("Database connection unavailable after all retries")
+            
+            # Try to query users from database
+            if current_db_manager and current_db_manager.is_available():
+                # Import User here to ensure it's available
+                if 'UserModel' not in locals():
+                    from database.models import User as UserModel
+                
+                session = current_db_manager.get_session()
+                if session is None:
+                    raise Exception("Could not create database session")
+                
+                users = session.query(UserModel).all()
+                session.close()
+                
+                # Return in the same dict format your app expects
+                user_dict = {
+                    u.id: {
+                        "password_hash": u.password_hash,
+                        "role": u.role,
+                        "full_name": u.full_name,
+                        "email": u.email,
+                        "phone": u.phone,
+                        "created_date": u.created_date.isoformat() if u.created_date else None,
+                        "last_login": u.last_login.isoformat() if u.last_login else None,
+                        "active": u.is_active,
+                        "two_factor_enabled": False,
+                        "two_factor_secret": None,
+                        "session_timeout": 30,
+                        "failed_attempts": 0,
+                        "locked_until": None,
+                        "assigned_classes": [],
+                        "departments": ["all"] if u.role == "principal" else [],
+                        "approval_status": u.approval_status or "pending",
+                        "approved_by": u.approved_by,
+                        "approval_date": u.approval_date.isoformat() if u.approval_date else None,
+                        "registration_notes": u.registration_notes
+                    }
+                    for u in users
+                }
+                
+                print(f"✅ Successfully loaded {len(user_dict)} users from database")
+                return user_dict
+                
+        except Exception as e:
+            print(f"❌ Database query attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                print(f"⏳ Retrying database connection in {retry_delay}s...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                print("❌ All database connection and query attempts failed")
+                # In production, we should not fall back to local files
+                # Instead, return empty dict and let the app handle it gracefully
+                print("⚠️ CRITICAL: Cannot access user database - authentication will not work")
+                return {}
 
 def load_user_database_fallback():
     """Fallback to JSON database for deployment environments"""
@@ -1783,89 +1807,138 @@ def save_activation_config(config):
         return False
 
 def check_activation_status():
-    """Check if the system is activated by querying Supabase directly - handles cloud restart scenarios"""
-    try:
-        # Always try database first, attempt to recover connection if needed
-        current_db_available = DATABASE_AVAILABLE
-        current_db_manager = db_manager
-        
-        # If database wasn't available initially, try to recover it now
-        if not current_db_available or not current_db_manager:
-            try:
-                from database.models import ActivationKey as ActivationKeyModel
-                from database.db_manager import DatabaseManager
-                
-                # Create a fresh database manager instance for activation check
-                fresh_db_manager = DatabaseManager()
-                if fresh_db_manager.engine is not None:
-                    current_db_available = True
-                    current_db_manager = fresh_db_manager
-                    print("✅ Database connection recovered for activation check")
-                else:
-                    # Database still not available
-                    return False, {"status": "database_unavailable"}, None
-            except Exception as e:
-                print(f"❌ Could not recover database connection for activation: {e}")
-                return False, {"status": "database_connection_failed"}, None
-        
-        if current_db_available and current_db_manager:
-            try:
-                # Import ActivationKey here to ensure it's available
-                if 'ActivationKeyModel' not in locals():
+    """Check if the system is activated by querying Supabase directly - PRODUCTION READY with robust retry logic"""
+    max_retries = 3
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            # Try to establish database connection with retry logic
+            current_db_manager = db_manager
+            
+            if not DATABASE_AVAILABLE or not current_db_manager or not current_db_manager.is_available():
+                print(f"🔄 Attempting database connection for activation check (attempt {attempt + 1}/{max_retries})")
+                try:
                     from database.models import ActivationKey as ActivationKeyModel
-                
-                session = current_db_manager.get_session()
-                active_key = session.query(ActivationKeyModel).filter_by(is_active=True).first()
-                session.close()
-                
-                if active_key:
-                    # Check if the key has expired
-                    if active_key.expires_at and active_key.expires_at < datetime.utcnow():
-                        return False, {"status": "key_expired", "activation_key": active_key.key_value}, active_key.expires_at
+                    from database.db_manager import DatabaseManager
                     
-                    # Key is active and not expired - system is activated
-                    status = {
-                        "activated": True,
-                        "activation_key": active_key.key_value,
-                        "subscription_type": active_key.subscription_type,
-                        "school_name": active_key.school_name,
-                        "expires_at": active_key.expires_at.isoformat() if active_key.expires_at else None
-                    }
-                    return True, status, active_key.expires_at
+                    # Create a fresh database manager instance for activation check
+                    fresh_db_manager = DatabaseManager()
+                    if fresh_db_manager.engine is not None and fresh_db_manager.is_available():
+                        current_db_manager = fresh_db_manager
+                        print("✅ Database connection established for activation check")
+                    else:
+                        if attempt < max_retries - 1:
+                            print(f"⏳ Database connection failed, retrying in {retry_delay}s...")
+                            time.sleep(retry_delay)
+                            continue
+                        else:
+                            print("❌ Database unavailable after all retries - allowing access")
+                            return True, {"status": "database_unavailable_allowing_access"}, None
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        print(f"❌ Database connection error (attempt {attempt + 1}): {e}, retrying...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        print(f"❌ Database connection failed after all retries: {e}")
+                        return True, {"status": "database_connection_failed_allowing_access"}, None
+            
+            # Query activation keys from database
+            if current_db_manager and current_db_manager.is_available():
+                try:
+                    # Import ActivationKey here to ensure it's available
+                    if 'ActivationKeyModel' not in locals():
+                        from database.models import ActivationKey as ActivationKeyModel
+                    
+                    session = current_db_manager.get_session()
+                    if session is None:
+                        raise Exception("Could not create database session")
+                    
+                    active_key = session.query(ActivationKeyModel).filter_by(is_active=True).first()
+                    session.close()
+                    
+                    if active_key:
+                        # Check if the key has expired
+                        if active_key.expires_at and active_key.expires_at < datetime.utcnow():
+                            return False, {"status": "key_expired", "activation_key": active_key.key_value}, active_key.expires_at
                         
-            except Exception as e:
-                print(f"Error querying activation keys from DB: {e}")
-                # Don't block login on database query errors
-                return True, {"status": "database_error_allowing_access"}, None
-
-        # If no database available or no active keys found, system is not activated
-        return False, {"status": "no_active_key"}, None
-    except Exception as e:
-        print(f"Check activation status error: {e}")
-        # Don't block login on unexpected errors
-        return True, {"status": "error_allowing_access"}, None
+                        # Key is active and not expired - system is activated
+                        status = {
+                            "activated": True,
+                            "activation_key": active_key.key_value,
+                            "subscription_type": active_key.subscription_type,
+                            "school_name": active_key.school_name,
+                            "expires_at": active_key.expires_at.isoformat() if active_key.expires_at else None
+                        }
+                        print(f"✅ System activated with key: {active_key.key_value}")
+                        return True, status, active_key.expires_at
+                    else:
+                        # No active key found in database
+                        print("⚠️ No active activation key found in database")
+                        return False, {"status": "no_active_key"}, None
+                        
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        print(f"❌ Database query error (attempt {attempt + 1}): {e}, retrying...")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        print(f"❌ Database query failed after all retries: {e}")
+                        # Allow access on final database error to avoid blocking users
+                        return True, {"status": "database_error_allowing_access"}, None
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                print(f"❌ Activation check error (attempt {attempt + 1}): {e}, retrying...")
+                time.sleep(retry_delay)
+                continue
+            else:
+                print(f"❌ Activation check failed after all retries: {e}")
+                # Allow access on final error to avoid blocking users
+                return True, {"status": "error_allowing_access"}, None
+    
+    # Fallback - should never reach here, but allow access if we do
+    return True, {"status": "fallback_allowing_access"}, None
 
 def is_activation_key_deactivated(activation_key):
-    """Check if an activation key has been deactivated by querying Supabase directly"""
+    """Check if an activation key has been deactivated by querying Supabase directly - PRODUCTION READY"""
     try:
-        if DATABASE_AVAILABLE and db_manager:
-            session = db_manager.get_session()
-            key = session.query(ActivationKey).filter_by(key_value=activation_key).first()
-            session.close()
-            
-            if key:
-                return not key.is_active  # Return True if key is deactivated (is_active = False)
-            else:
-                return True  # If key doesn't exist, consider it deactivated
-        
-        # Fallback to local file if database not available
-        if os.path.exists("activation_records.json"):
-            with open("activation_records.json", 'r') as f:
-                records = json.load(f)
-
-            for record in records:
-                if record.get('activation_key') == activation_key:
-                    return record.get('status', 'generated') == 'deactivated'
+        # Always try database with robust retry logic
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                current_db_manager = db_manager
+                
+                if not DATABASE_AVAILABLE or not current_db_manager or not current_db_manager.is_available():
+                    from database.models import ActivationKey as ActivationKeyModel
+                    from database.db_manager import DatabaseManager
+                    current_db_manager = DatabaseManager()
+                
+                if current_db_manager and current_db_manager.is_available():
+                    session = current_db_manager.get_session()
+                    if session:
+                        key = session.query(ActivationKeyModel).filter_by(key_value=activation_key).first()
+                        session.close()
+                        
+                        if key:
+                            return not key.is_active  # Return True if key is deactivated (is_active = False)
+                        else:
+                            return True  # If key doesn't exist, consider it deactivated
+                else:
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+                        continue
+                    
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"Database query attempt {attempt + 1} failed: {e}, retrying...")
+                    time.sleep(1)
+                    continue
+                else:
+                    print(f"Error checking activation key status: {e}")
+                    
+        # If database is completely unavailable, assume key is not deactivated to avoid blocking users
         return False
     except Exception:
         return False
@@ -1921,78 +1994,63 @@ def generate_activation_key(school_name=None, subscription_type="monthly", expir
 
     return formatted_key
 def activate_system(activation_key, subscription_type="monthly"):
-    """Activate the system with provided key from Supabase"""
-    try:
-        from database.models import ActivationKey
-    except ImportError:
-        # Create a fallback if database not available in deployment
-        class ActivationKey:
-            pass
-    try:
-        from database.db_manager import db_manager
-        session = db_manager.get_session()
-    except ImportError:
-        return False  # Database not available
-    key = session.query(ActivationKey).filter_by(key_value=activation_key).first()
+    """Activate the system with provided key from Supabase - PRODUCTION READY (no local files)"""
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            # Try to get database connection
+            current_db_manager = db_manager
+            
+            if not DATABASE_AVAILABLE or not current_db_manager or not current_db_manager.is_available():
+                from database.models import ActivationKey as ActivationKeyModel
+                from database.db_manager import DatabaseManager
+                current_db_manager = DatabaseManager()
+            
+            if not current_db_manager or not current_db_manager.is_available():
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return False  # Database not available
+            
+            session = current_db_manager.get_session()
+            if not session:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return False
+            
+            # Import ActivationKey here to ensure it's available
+            if 'ActivationKeyModel' not in locals():
+                from database.models import ActivationKey as ActivationKeyModel
+            
+            key = session.query(ActivationKeyModel).filter_by(key_value=activation_key).first()
 
-    if not key:
-        session.close()
-        return False
-    if not key.is_active:
-        session.close()
-        return False
-    if key.expires_at and key.expires_at < datetime.utcnow():
-        session.close()
-        return False
+            if not key:
+                session.close()
+                return False  # Key doesn't exist
+            if not key.is_active:
+                session.close()
+                return False  # Key deactivated
+            if key.expires_at and key.expires_at < datetime.utcnow():
+                session.close()
+                return False  # Key expired
 
-    # Mark as active (optional: could also store 'last_activated_at')
-    key.is_active = True
-    session.commit()
-    session.close()
-
-    return True
-
-
-
-def activate_system(activation_key, subscription_type="monthly"):
-    """Activate the system with provided key from Supabase"""
-    try:
-        from database.models import ActivationKey
-    except ImportError:
-        # Create a fallback if database not available in deployment
-        class ActivationKey:
-            pass
-    try:
-        from database.db_manager import db_manager
-        session = db_manager.get_session()
-    except ImportError:
-        return False  # Database not available
-    key = session.query(ActivationKey).filter_by(key_value=activation_key).first()
-    session.close()
-
-    if not key:
-        return False  # Key doesn't exist
-    if not key.is_active:
-        return False  # Key deactivated
-    if key.expires_at and key.expires_at < datetime.utcnow():
-        return False  # Key expired
-
-    activation_data = {
-        "activated": True,
-        "activation_date": datetime.utcnow().isoformat(),
-        "activation_key": activation_key,
-        "subscription_type": key.subscription_type or subscription_type,
-        "activated_by": "system",
-        "activation_method": "key_input",
-        "persistent": True,
-        "restart_safe": True
-    }
-
-    # Save activation status locally so app knows it's activated
-    with open("activation_status.json", 'w') as f:
-        json.dump(activation_data, f, indent=2)
-
-    return True
+            # Key is valid - mark as active and save to database only (no local files)
+            key.is_active = True
+            session.commit()
+            session.close()
+            
+            print(f"✅ System activated successfully with key: {activation_key}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Activation attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            return False
+    
+    return False
 
 def get_payment_instructions():
     """Get payment instructions for activation"""
