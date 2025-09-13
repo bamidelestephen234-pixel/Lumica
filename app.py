@@ -83,10 +83,13 @@ def query_with_retry(sql, params=None, retries=3, ttl=300):
             if not conn:
                 raise Exception("No database connection available")
             
+            # Convert SQLAlchemy text() objects to strings for Streamlit caching compatibility
+            sql_str = str(sql) if hasattr(sql, 'text') else sql
+            
             if params:
-                return conn.query(sql, params=params, ttl=ttl)
+                return conn.query(sql_str, params=params, ttl=ttl)
             else:
-                return conn.query(sql, ttl=ttl)
+                return conn.query(sql_str, ttl=ttl)
                 
         except Exception as e:
             if attempt == retries - 1:
