@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import OperationalError
 from database.models import Base
 
+
 class DatabaseManager:
     def __init__(self):
         self.engine = None
@@ -13,6 +14,7 @@ class DatabaseManager:
         self._initialize_connection()
     
     def _initialize_connection(self):
+        """Initialize database connection with proper error handling"""
         # Get database URL from environment variables only
         DATABASE_URL = os.getenv("DATABASE_URL")
         
@@ -44,15 +46,17 @@ class DatabaseManager:
             self.SessionLocal = None
     
     def get_session(self):
+        """Get a new database session"""
         if not self.SessionLocal:
             return None
         return self.SessionLocal()
     
     def is_available(self):
+        """Check if database connection is available"""
         return self.engine is not None
     
     def init_database(self):
-        """Initialize database tables"""
+        """Initialize database tables with comprehensive error handling"""
         if not self.is_available():
             print("❌ Database not available, skipping table initialization")
             return False
@@ -68,12 +72,13 @@ class DatabaseManager:
             print(f"❌ Unexpected error during DB init: {e}")
             return False
 
+
 # Create global instance
 db_manager = DatabaseManager()
 
-# Initialize tables function
+
 def init_db():
-    """Initialize database tables"""
+    """Initialize database tables - standalone function"""
     if not db_manager.is_available():
         print("❌ Database not available, skipping table initialization")
         return False
@@ -88,6 +93,7 @@ def init_db():
     except Exception as e:
         print(f"❌ Unexpected error during DB init: {e}")
         return False
+
 
 if __name__ == "__main__":
     init_db()
