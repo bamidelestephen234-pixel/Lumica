@@ -1952,12 +1952,15 @@ def check_activation_status():
                     if 'ActivationKeyModel' not in locals():
                         from database.models import ActivationKey as ActivationKeyModel
                     
-                    session = current_db_manager.get_session()
-                    if session is None:
-                        raise Exception("Could not create database session")
-                    
-                    active_key = session.query(ActivationKeyModel).filter_by(is_active=True).first()
-                    session.close()
+                   session = current_db_manager.get_session()
+            if session is None:
+                raise Exception("Could not create database session")
+            try:
+                 active_key = session.query(ActivationKeyModel).filter_by(is_active=True).first()
+            finally:
+                session.close()
+                
+                
                     
                     if active_key:
                         # Check if the key has expired
@@ -2019,11 +2022,12 @@ def is_activation_key_deactivated(activation_key):
                 if current_db_manager and current_db_manager.is_available():
                     session = current_db_manager.get_session()
                     if session:
-                        key = session.query(ActivationKeyModel).filter_by(key_value=activation_key).first()
-                        session.close()
-                        
+                        try:
+                            key = session.query(ActivationKeyModel).filter_by(key_value=activation_key).first()
+                        finally:
+                            session.close()
                         if key:
-                            return not key.is_active  # Return True if key is deactivated (is_active = False)
+                            return not key.is_active  # True if deactivated
                         else:
                             return True  # If key doesn't exist, consider it deactivated
                 else:
