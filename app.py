@@ -23,6 +23,10 @@ import uuid
 import string
 import pyotp
 import qrcode as qr_gen
+from database.db_manager import get_session
+from sqlalchemy import text
+from datetime import datetime
+
 from io import BytesIO, StringIO
 # PDF generation imports - make weasyprint optional
 try:
