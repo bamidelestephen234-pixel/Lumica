@@ -38,22 +38,37 @@ def get_session():
 # --- Schema migration ---
 def ensure_schema():
     """
-    Ensure required columns exist in the 'users' table and any other schema fixes.
+    Create all tables and ensure required columns exist.
     """
     engine = get_engine()
+    
+    # First, create all tables from models
+    Base.metadata.create_all(engine)
+    
+    # Then ensure additional columns exist
     with engine.begin() as conn:
-        conn.execute(text("""
-            ALTER TABLE users
-            ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved',
-            ADD COLUMN IF NOT EXISTS approved_by UUID NULL,
-            ADD COLUMN IF NOT EXISTS approval_date TIMESTAMP NULL,
-            ADD COLUMN IF NOT EXISTS registration_notes TEXT NULL;
-        """))
-        # Example: ensure students table has class_name
-        conn.execute(text("""
-            ALTER TABLE students
-            ADD COLUMN IF NOT EXISTS class_name TEXT NULL;
-        """))
+        # Users table additional columns
+        try:
+            conn.execute(text("""
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved',
+                ADD COLUMN IF NOT EXISTS approved_by TEXT NULL,
+                ADD COLUMN IF NOT EXISTS approval_date TIMESTAMP NULL,
+                ADD COLUMN IF NOT EXISTS registration_notes TEXT NULL,
+                ADD COLUMN IF NOT EXISTS failed_attempts INTEGER DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP NULL;
+            """))
+        except Exception as e:
+            print(f"Note: Some user table columns may already exist: {e}")
+        
+        # Students table additional columns
+        try:
+            conn.execute(text("""
+                ALTER TABLE students
+                ADD COLUMN IF NOT EXISTS class_name TEXT NULL;
+            """))
+        except Exception as e:
+            print(f"Note: Some student table columns may already exist: {e}")
 
 # --- Safe seeding ---
 def seed_default_users():
@@ -101,3 +116,26 @@ def init_database():
     ensure_schema()
     seed_default_users()
     st.info("✅ Database schema ensured and default users seeded.")
+
+class DatabaseManager:
+    """Simple database manager class to match the app's expected interface"""
+    
+    def __init__(self):
+        self.engine = get_engine()
+    
+    def get_session(self):
+        """Get a new database session"""
+        return get_session()
+    
+    def is_available(self):
+        """Check if database connection is available"""
+        try:
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+                return True
+        except Exception as e:
+            print(f"Database availability check failed: {e}")
+            return False
+
+# Create a global db_manager instance
+db_manager = DatabaseManager()
