@@ -7337,6 +7337,56 @@ def report_generator_page():
             st.session_state.authenticated = False
             st.session_state.teacher_id = None
             st.rerun()
+            # --- Role & Access Setup ---
+users_db = load_user_database()
+current_role = ""
+
+if "teacher_id" in st.session_state:
+    user_info = users_db.get(st.session_state.teacher_id, {})
+    current_role = user_info.get("role", "").strip()
+elif "role" in st.session_state and st.session_state.role.lower() == "administrator":
+    current_role = "Administrator"
+else:
+    st.error("Access denied. Please log in first.")
+    st.stop()
+
+# --- Build Tabs ---
+available_tabs = []
+
+if current_role.lower() == "administrator":
+    # Admin gets full access to all tabs
+    available_tabs = [
+        ("⚙️ Admin Panel", "admin"),
+        ("📝 Generate Reports", "reports"),
+        ("📝 Draft Reports", "drafts"),
+        ("👥 Student Database", "database"),
+        ("📊 Analytics", "analytics"),
+        ("🔍 Verify Reports", "verify")
+    ]
+else:
+    # Teachers get tabs based on feature access
+    if check_user_feature_access(st.session_state.teacher_id, "report_generation"):
+        available_tabs.append(("📝 Generate Reports", "reports"))
+    if check_user_feature_access(st.session_state.teacher_id, "draft_management"):
+        available_tabs.append(("📝 Draft Reports", "drafts"))
+    if check_user_feature_access(st.session_state.teacher_id, "student_database"):
+        available_tabs.append(("👥 Student Database", "database"))
+    if check_user_feature_access(st.session_state.teacher_id, "analytics_dashboard"):
+        available_tabs.append(("📊 Analytics", "analytics"))
+    if check_user_feature_access(st.session_state.teacher_id, "verification_system"):
+        available_tabs.append(("🔍 Verify Reports", "verify"))
+    if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
+        available_tabs.append(("⚙️ Admin Panel", "admin"))
+
+# --- Fallback to prevent crash ---
+if not available_tabs:
+    available_tabs = [("🏠 Home", "home")]
+
+# --- Create Tabs ---
+tab_names = [tab[0] for tab in available_tabs]
+tab_keys = [tab[1] for tab in available_tabs]
+tabs = st.tabs(tab_names)
+
 
     # Check session timeout
     if check_session_timeout():
