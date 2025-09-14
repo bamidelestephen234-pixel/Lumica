@@ -23,10 +23,6 @@ import uuid
 import string
 import pyotp
 import qrcode as qr_gen
-from database.db_manager import get_session
-from sqlalchemy import text
-from datetime import datetime
-
 from io import BytesIO, StringIO
 # PDF generation imports - make weasyprint optional
 try:
@@ -62,31 +58,6 @@ def init_sql_connection():
     except Exception as e:
         print(f"Failed to initialize SQL connection: {e}")
         return None
-from sqlalchemy import text
-
-def add_audit_log(user_id, action, details):
-    """Insert an audit log entry into the audit_logs table."""
-    session = get_session()
-    try:
-        session.execute(
-            text("""
-                INSERT INTO audit_logs (user_id, action, details, timestamp)
-                VALUES (:user_id, :action, :details, :timestamp)
-            """),
-            {
-                "user_id": user_id,
-                "action": action,
-                "details": details,
-                "timestamp": datetime.utcnow()
-            }
-        )
-        session.commit()
-    except Exception as e:
-        print(f"Error adding audit log: {e}")
-    finally:
-        session.close()
-
-
 
 def get_healthy_sql_connection():
     """Get a healthy SQL connection with automatic stale connection detection"""
@@ -7465,71 +7436,55 @@ def report_generator_page():
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
-    # Get the current user's role from the database/session
-# Get the current user's role from the database/session
-users_db = load_user_database()
 
-if "teacher_id" in st.session_state:
-    user_info = users_db.get(st.session_state.teacher_id, {})
-    current_role = user_info.get("role", "").strip()
-else:
-    st.warning("No teacher is logged in. Please log in first.")
-    st.stop()
+    # Staff interface with feature-based access control
+        available_tabs = []
 
-# Staff interface with feature-based access control
-available_tabs = []
+        # Generate Reports
+        if check_user_feature_access(st.session_state.teacher_id, "report_generation"):
+            available_tabs.append(("📝 Generate Reports", "reports"))
 
+        # Draft Reports
+        if check_user_feature_access(st.session_state.teacher_id, "draft_management"):
+            available_tabs.append(("📝 Draft Reports", "drafts"))
 
-# ✅ Ensure Administrator role always gets the Admin Panel tab
-if current_role and current_role.lower() == "administrator":
-    available_tabs.append(("⚙️ Admin Panel", "admin"))
+        # Student Database
+        if check_user_feature_access(st.session_state.teacher_id, "student_database"):
+            available_tabs.append(("👥 Student Database", "database"))
 
-# Generate Reports
-if check_user_feature_access(st.session_state.teacher_id, "report_generation"):
-    available_tabs.append(("📝 Generate Reports", "reports"))
+        # Analytics
+        if check_user_feature_access(st.session_state.teacher_id, "analytics_dashboard"):
+            available_tabs.append(("📊 Analytics", "analytics"))
 
-# Draft Reports
-if check_user_feature_access(st.session_state.teacher_id, "draft_management"):
-    available_tabs.append(("📝 Draft Reports", "drafts"))
+        # Verification
+        if check_user_feature_access(st.session_state.teacher_id, "verification_system"):
+            available_tabs.append(("🔍 Verify Reports", "verify"))
 
-# Student Database
-if check_user_feature_access(st.session_state.teacher_id, "student_database"):
-    available_tabs.append(("👥 Student Database", "database"))
+        # Admin Panel
+        if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
+            available_tabs.append(("⚙️ Admin Panel", "admin"))
 
-# Analytics
-if check_user_feature_access(st.session_state.teacher_id, "analytics_dashboard"):
-    available_tabs.append(("📊 Analytics", "analytics"))
+        # Create tabs
+        tab_names = [tab[0] for tab in available_tabs]
+        tab_keys = [tab[1] for tab in available_tabs]
 
-# Verification
-if check_user_feature_access(st.session_state.teacher_id, "verification_system"):
-    available_tabs.append(("🔍 Verify Reports", "verify"))
+        tabs = st.tabs(tab_names)
 
-# Admin Panel (feature-based)
-if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
-    available_tabs.append(("⚙️ Admin Panel", "admin"))
+        for i, (tab_name, tab_key) in enumerate(available_tabs):
+            with tabs[i]:
+                if tab_key == "reports":
+                    report_generator_tab()
 
-# ✅ Fallback so st.tabs never gets an empty list
-if not available_tabs:
-    available_tabs = [("🏠 Home", "home")]  
-# Create tabs
-tab_names = [tab[0] for tab in available_tabs]
-tab_keys = [tab[1] for tab in available_tabs]
-tabs = st.tabs(tab_names)
-
-for i, (tab_name, tab_key) in enumerate(available_tabs):
-    with tabs[i]:
-        if tab_key == "reports":
-            report_generator_tab()
-        elif tab_key == "drafts":
-            draft_reports_tab()
-        elif tab_key == "database":
-            student_database_tab()
-        elif tab_key == "analytics":
-            analytics_dashboard_tab()
-        elif tab_key == "verify":
-            verification_tab()
-        elif tab_key == "admin":
-            admin_panel_tab()
+                elif tab_key == "drafts":
+                    draft_reports_tab()
+                elif tab_key == "database":
+                    student_database_tab()
+                elif tab_key == "analytics":
+                    analytics_dashboard_tab()
+                elif tab_key == "verify":
+                    verification_tab()
+                elif tab_key == "admin":
+                    admin_panel_tab()
 
 def init_database_tables():
     """Initialize database tables using Streamlit SQL Connection - PRODUCTION READY"""
