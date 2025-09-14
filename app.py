@@ -7465,9 +7465,48 @@ def report_generator_page():
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
+    # Get the current user's role from the database/session
+users_db = load_user_database()
+user_info = users_db.get(st.session_state.teacher_id, {})
+current_role = user_info.get("role", "").strip()
+
 
     # Staff interface with feature-based access control
-        available_tabs = []
+available_tabs = []
+
+# ✅ Ensure Administrator role always gets the Admin Panel tab
+if current_role and current_role.lower() == "administrator":
+    available_tabs.append(("⚙️ Admin Panel", "admin"))
+
+# Generate Reports
+if check_user_feature_access(st.session_state.teacher_id, "report_generation"):
+    available_tabs.append(("📝 Generate Reports", "reports"))
+
+# Draft Reports
+if check_user_feature_access(st.session_state.teacher_id, "draft_management"):
+    available_tabs.append(("📝 Draft Reports", "drafts"))
+
+# Student Database
+if check_user_feature_access(st.session_state.teacher_id, "student_database"):
+    available_tabs.append(("👥 Student Database", "database"))
+
+# Analytics
+if check_user_feature_access(st.session_state.teacher_id, "analytics_dashboard"):
+    available_tabs.append(("📊 Analytics", "analytics"))
+
+# Verification
+if check_user_feature_access(st.session_state.teacher_id, "verification_system"):
+    available_tabs.append(("🔍 Verify Reports", "verify"))
+
+# Admin Panel (feature-based)
+if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
+    available_tabs.append(("⚙️ Admin Panel", "admin"))
+
+# ✅ Fallback so st.tabs never gets an empty list
+if not available_tabs:
+    available_tabs = [("🏠 Home", "home")]
+
+        
 
         # Generate Reports
         if check_user_feature_access(st.session_state.teacher_id, "report_generation"):
