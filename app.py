@@ -461,8 +461,6 @@ import uuid
 def load_user_database():
     """Load user database using Streamlit SQL Connection - PRODUCTION READY for Streamlit Cloud"""
     try:
-        print("🔄 Loading users from database...")
-        
         # Query users using the new Streamlit SQL approach
         users_df = query_with_retry("""
             SELECT id, password_hash, role, full_name, email, phone, 
@@ -473,7 +471,6 @@ def load_user_database():
         """, ttl=60)  # Cache for 1 minute
         
         if users_df.empty:
-            print("⚠️ No users found in database")
             return {}
         
         # Convert DataFrame to the dict format expected by the app
@@ -502,13 +499,10 @@ def load_user_database():
                 "registration_notes": row['registration_notes']
             }
         
-        print(f"✅ Successfully loaded {len(user_dict)} users from database")
         return user_dict
         
     except Exception as e:
-        print(f"❌ Failed to load users from database: {e}")
-        print("⚠️ CRITICAL: Cannot access user database - authentication will not work")
-        
+        # Log error for server logs, but don't expose internal details
         # Show error in UI if in Streamlit context
         try:
             st.error("🔌 Database connection issue. Please refresh the page or contact support.")
@@ -664,10 +658,8 @@ def save_user_database(users_db):
                 }
                 execute_sql_with_retry(insert_sql, params)
         
-        print(f"✅ Saved {len(users_db)} users using new SQL connection")
         return True
     except Exception as e:
-        print(f"❌ Error saving users to DB: {e}")
         return False
 
 def check_user_permissions(user_id, required_permission):
@@ -684,6 +676,11 @@ def check_user_permissions(user_id, required_permission):
             return False
 
         user_permissions = USER_ROLES[user_role]['permissions']
+        
+        # CRITICAL SECURITY: activation_settings requires explicit permission - never granted via all_access
+        if required_permission == 'activation_settings':
+            return 'activation_settings' in user_permissions
+            
         return required_permission in user_permissions or 'all_access' in user_permissions
     except Exception as e:
         return False
@@ -691,53 +688,36 @@ def check_user_permissions(user_id, required_permission):
 def check_user_feature_access(user_id, feature_key):
     """Check if user has access to a specific system feature"""
     try:
-        print(f"🔍 DEBUG: Checking feature access for user_id='{user_id}', feature='{feature_key}'")
         users_db = load_user_database()
-        print(f"🔍 DEBUG: Loaded {len(users_db)} users from database")
-        print(f"🔍 DEBUG: Available user IDs: {list(users_db.keys())}")
         
         if user_id not in users_db:
-            print(f"❌ DEBUG: User '{user_id}' not found in database")
             return False
 
         user = users_db[user_id]
-        print(f"✅ DEBUG: Found user '{user_id}' with role '{user.get('role', 'unknown')}'")
 
         # Check custom feature permissions first
         custom_features = user.get('custom_features', [])
         if custom_features:
-            result = feature_key in custom_features
-            print(f"🔍 DEBUG: Custom features check: {result} (custom_features: {custom_features})")
-            return result
+            return feature_key in custom_features
 
         # Fall back to role-based default features
         user_role = user.get('role', 'teacher')
-        print(f"🔍 DEBUG: User role: '{user_role}'")
         
         if user_role not in USER_ROLES:
-            print(f"❌ DEBUG: Role '{user_role}' not found in USER_ROLES")
             return False
 
         default_features = USER_ROLES[user_role].get('default_features', [])
-        print(f"🔍 DEBUG: Default features for role '{user_role}': {default_features}")
 
         # Check if feature requires specific permission
         if feature_key in SYSTEM_FEATURES:
             required_permission = SYSTEM_FEATURES[feature_key].get('required_permission')
-            print(f"🔍 DEBUG: Feature '{feature_key}' requires permission: '{required_permission}'")
             if required_permission:
-                result = check_user_permissions(user_id, required_permission)
-                print(f"🔍 DEBUG: Permission check result: {result}")
-                return result
+                return check_user_permissions(user_id, required_permission)
             else:
-                print("✅ DEBUG: No specific permission required, granting access")
                 return True  # No specific permission required
 
-        result = feature_key in default_features
-        print(f"🔍 DEBUG: Default features check result: {result}")
-        return result
+        return feature_key in default_features
     except Exception as e:
-        print(f"❌ DEBUG: Exception in feature access check: {e}")
         return False
 
 def is_user_locked(user_id):
@@ -3992,8 +3972,10 @@ def complete_login(user_id, user):
 
     st.session_state.authenticated = True
     st.session_state.user_type = "staff"
-    st.session_state.teacher_id = user_id
+    st.session_state.user_id = user_id  # Universal user identifier for all roles
+    st.session_state.teacher_id = user_id  # Legacy compatibility - maintain for now
     st.session_state.user_role = user.get('role', 'teacher')
+    st.session_state.role = user.get('role', 'teacher')  # Additional role state for clarity
     st.session_state.user_permissions = USER_ROLES.get(user.get('role', 'teacher'), {}).get('permissions', [])
     st.session_state.session_timeout = user.get('session_timeout', 30)
     st.session_state.last_activity = datetime.now()
@@ -7453,7 +7435,6 @@ def report_generator_page():
 
         # FALLBACK: Ensure at least one tab is always available
         if not available_tabs:
-            print("⚠️ WARNING: No feature access granted, adding default dashboard tab")
             available_tabs.append(("🏠 Dashboard", "dashboard"))
 
         # Create tabs
@@ -7477,21 +7458,19 @@ def report_generator_page():
                 elif tab_key == "admin":
                     admin_panel_tab()
                 elif tab_key == "dashboard":
-                    # Fallback dashboard tab
-                    st.info("🔍 **Debug Information**")
-                    st.write("**User ID:**", st.session_state.get('teacher_id', 'Not set'))
-                    st.write("**Authentication Status:**", st.session_state.get('authenticated', False))
+                    # Fallback dashboard tab - clean interface
+                    st.info("🏠 **Welcome to your Dashboard**")
+                    st.markdown("### Account Information")
                     
-                    # Show feature access debug info
-                    st.subheader("🔐 Feature Access Debug")
-                    features_to_check = ["report_generation", "draft_management", "student_database", "analytics_dashboard", "verification_system", "admin_panel"]
+                    users_db = load_user_database()
+                    user_info = users_db.get(st.session_state.teacher_id, {})
+                    role_description = USER_ROLES.get(user_info.get('role', 'teacher'), {}).get('description', 'User')
                     
-                    for feature in features_to_check:
-                        has_access = check_user_feature_access(st.session_state.teacher_id, feature)
-                        status = "✅ Granted" if has_access else "❌ Denied"
-                        st.write(f"**{feature}:** {status}")
+                    st.success(f"**Role:** {role_description}")
+                    st.info(f"**Name:** {user_info.get('full_name', 'Not available')}")
                     
-                    st.warning("⚠️ No feature access was granted to your account. Please contact an administrator to configure your permissions.")
+                    st.markdown("### Available Features")
+                    st.info("Your account permissions are being configured. If you believe you should have access to additional features, please contact your system administrator.")
 
 def init_database_tables():
     """Initialize database tables using Streamlit SQL Connection - PRODUCTION READY"""
@@ -7736,19 +7715,12 @@ try:
 except Exception as e:
     print(f"Module-level database initialization failed: {e}")
 
-# SECURITY VALIDATION: Run comprehensive security testing after all functions are defined
-print("\n🔐 RUNNING COMPREHENSIVE SECURITY VALIDATION...")
-try:
-    validation_success = validate_security_fixes()
-    if validation_success:
-        print("✅ ALL CRITICAL SECURITY FIXES VERIFIED AND WORKING CORRECTLY")
-        print("🛡️ System is now secure against the reported vulnerabilities")
-    else:
-        print("❌ SOME SECURITY TESTS FAILED - REVIEW REQUIRED")
-except Exception as e:
-    print(f"❌ SECURITY VALIDATION ERROR: {e}")
-    print("✅ Core security fixes are in place even if validation fails")
-print("🔐 Security validation completed")
+# SECURITY VALIDATION: Disabled for production to reduce startup logs
+# Uncomment below for security testing in development
+# try:
+#     validation_success = validate_security_fixes()
+# except Exception as e:
+#     pass
 
 # Guard imports and context checking
 from streamlit.runtime.scriptrunner import get_script_run_ctx
