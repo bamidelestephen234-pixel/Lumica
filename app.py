@@ -360,7 +360,7 @@ def validate_security_fixes():
 USER_ROLES = {
     "administrator": {
         "level": 6,
-        "permissions": ["super_admin", "all_access", "user_management", "system_config", "backup_restore", "data_export", "activation_settings"],
+        "permissions": ["super_admin", "all_access", "user_management", "system_config", "backup_restore", "data_export", "activation_settings", "report_generation", "student_management", "department_reports"],
         "description": "Administrator - Supreme system access",
         "default_features": [
             "report_generation", "draft_management", "student_database", 
@@ -525,7 +525,7 @@ def save_user_database(users_db):
         
         # CRITICAL SECURITY: Multi-layered Administrator account deactivation protection
         # This protection works even when session state is compromised or missing
-        current_user_id = st.session_state.get('teacher_id') if hasattr(st, 'session_state') else None
+        current_user_id = st.session_state.get('user_id') if hasattr(st, 'session_state') else None
         current_users_db = load_user_database()
         
         # Layer 1: Session-based protection (if available)
@@ -714,7 +714,7 @@ def check_user_feature_access(user_id, feature_key):
             if required_permission:
                 return check_user_permissions(user_id, required_permission)
             else:
-                return True  # No specific permission required
+                return feature_key in default_features  # Check default features for non-permission features
 
         return feature_key in default_features
     except Exception as e:
@@ -7408,29 +7408,32 @@ def report_generator_page():
 
     # Staff interface with feature-based access control
         available_tabs = []
+        
+        # Use universal user_id for feature access checks
+        current_user_id = st.session_state.get('user_id', st.session_state.get('teacher_id'))
 
         # Generate Reports
-        if check_user_feature_access(st.session_state.teacher_id, "report_generation"):
+        if check_user_feature_access(current_user_id, "report_generation"):
             available_tabs.append(("📝 Generate Reports", "reports"))
 
         # Draft Reports
-        if check_user_feature_access(st.session_state.teacher_id, "draft_management"):
+        if check_user_feature_access(current_user_id, "draft_management"):
             available_tabs.append(("📝 Draft Reports", "drafts"))
 
         # Student Database
-        if check_user_feature_access(st.session_state.teacher_id, "student_database"):
+        if check_user_feature_access(current_user_id, "student_database"):
             available_tabs.append(("👥 Student Database", "database"))
 
         # Analytics
-        if check_user_feature_access(st.session_state.teacher_id, "analytics_dashboard"):
+        if check_user_feature_access(current_user_id, "analytics_dashboard"):
             available_tabs.append(("📊 Analytics", "analytics"))
 
         # Verification
-        if check_user_feature_access(st.session_state.teacher_id, "verification_system"):
+        if check_user_feature_access(current_user_id, "verification_system"):
             available_tabs.append(("🔍 Verify Reports", "verify"))
 
         # Admin Panel
-        if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
+        if check_user_feature_access(current_user_id, "admin_panel"):
             available_tabs.append(("⚙️ Admin Panel", "admin"))
 
         # FALLBACK: Ensure at least one tab is always available
@@ -7463,7 +7466,8 @@ def report_generator_page():
                     st.markdown("### Account Information")
                     
                     users_db = load_user_database()
-                    user_info = users_db.get(st.session_state.teacher_id, {})
+                    current_user_id = st.session_state.get('user_id', st.session_state.get('teacher_id'))
+                    user_info = users_db.get(current_user_id, {})
                     role_description = USER_ROLES.get(user_info.get('role', 'teacher'), {}).get('description', 'User')
                     
                     st.success(f"**Role:** {role_description}")
