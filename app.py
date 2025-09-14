@@ -1952,14 +1952,14 @@ def check_activation_status():
                     if 'ActivationKeyModel' not in locals():
                         from database.models import ActivationKey as ActivationKeyModel
                     
-                   session = current_db_manager.get_session()
-            if session is None:
-                raise Exception("Could not create database session")
-            try:
-                 active_key = session.query(ActivationKeyModel).filter_by(is_active=True).first()
-            finally:
-                session.close()
-                
+                    session = current_db_manager.get_session()
+                    if session is None:
+                        raise Exception("Could not create database session")
+                    try:
+                         active_key = session.query(ActivationKeyModel).filter_by(is_active=True).first()
+                    finally:
+                        session.close()
+                        
                 
                     
                     if active_key:
