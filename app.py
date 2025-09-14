@@ -7510,21 +7510,20 @@ tab_names = [tab[0] for tab in available_tabs]
 tab_keys = [tab[1] for tab in available_tabs]
 tabs = st.tabs(tab_names)
 
-        for i, (tab_name, tab_key) in enumerate(available_tabs):
-            with tabs[i]:
-                if tab_key == "reports":
-                    report_generator_tab()
-
-                elif tab_key == "drafts":
-                    draft_reports_tab()
-                elif tab_key == "database":
-                    student_database_tab()
-                elif tab_key == "analytics":
-                    analytics_dashboard_tab()
-                elif tab_key == "verify":
-                    verification_tab()
-                elif tab_key == "admin":
-                    admin_panel_tab()
+for i, (tab_name, tab_key) in enumerate(available_tabs):
+    with tabs[i]:
+        if tab_key == "reports":
+            report_generator_tab()
+        elif tab_key == "drafts":
+            draft_reports_tab()
+        elif tab_key == "database":
+            student_database_tab()
+        elif tab_key == "analytics":
+            analytics_dashboard_tab()
+        elif tab_key == "verify":
+            verification_tab()
+        elif tab_key == "admin":
+            admin_panel_tab()
 
 def init_database_tables():
     """Initialize database tables using Streamlit SQL Connection - PRODUCTION READY"""
