@@ -1,99 +1,103 @@
-# db_manager.py
+# database/db_manager.py
 import os
-import sys
+import uuid
+from datetime import datetime
+import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError
+
+# Import your Base and password hashing from existing modules
 from database.models import Base
+from utils.security import hash_password  # adjust import path if needed
 
+# --- Restart-safe engine ---
+@st.cache_resource
+def get_engine():
+    """
+    Create a restart-safe SQLAlchemy engine with connection recycling.
+    Reads DATABASE_URL from Streamlit secrets or environment variables.
+    """
+    db_url = st.secrets["DATABASE_URL"] if "DATABASE_URL" in st.secrets else os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("❌ DATABASE_URL not found in secrets or environment variables.")
+    return create_engine(db_url.strip(), pool_pre_ping=True, pool_recycle=1800)
 
-class DatabaseManager:
-    def __init__(self):
-        self.engine = None
-        self.SessionLocal = None
-        self._initialize_connection()
-    
-    def _initialize_connection(self):
-        """Initialize database connection with proper error handling"""
-        # Get database URL from environment variables only
-        DATABASE_URL = os.getenv("DATABASE_URL")
-        
-        if not DATABASE_URL:
-            print("❌ DATABASE_URL not found in environment variables.")
-            print("Please set DATABASE_URL in your Replit Secrets.")
-            self.engine = None
-            self.SessionLocal = None
-            return
-        
-        # Sanitize the URL by removing quotes and whitespace
-        url = DATABASE_URL.strip()
-        if (url.startswith('"') and url.endswith('"')) or (url.startswith("'") and url.endswith("'")):
-            url = url[1:-1]
-        
+def get_session():
+    """
+    Get a new SQLAlchemy session.
+    Always close it after use: 
+        session = get_session()
         try:
-            self.engine = create_engine(url, pool_pre_ping=True)
-            self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
-            
-            # Validate connection with a quick test
-            with self.engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            
-            print("✅ Database connection established and validated successfully.")
-        except Exception as e:
-            print(f"❌ Failed to create database engine: {e}")
-            print(f"   URL format issue detected (credentials not logged for security)")
-            self.engine = None
-            self.SessionLocal = None
-    
-    def get_session(self):
-        """Get a new database session"""
-        if not self.SessionLocal:
-            return None
-        return self.SessionLocal()
-    
-    def is_available(self):
-        """Check if database connection is available"""
-        return self.engine is not None
-    
-    def init_database(self):
-        """Initialize database tables with comprehensive error handling"""
-        if not self.is_available():
-            print("❌ Database not available, skipping table initialization")
-            return False
-        
-        try:
-            Base.metadata.create_all(bind=self.engine)
-            print("✅ Database tables initialized successfully.")
-            return True
-        except OperationalError as e:
-            print(f"❌ Database initialization failed: {e}")
-            return False
-        except Exception as e:
-            print(f"❌ Unexpected error during DB init: {e}")
-            return False
+            ...
+        finally:
+            session.close()
+    """
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
+    return SessionLocal()
 
+# --- Schema migration ---
+def ensure_schema():
+    """
+    Ensure required columns exist in the 'users' table and any other schema fixes.
+    """
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text("""
+            ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved',
+            ADD COLUMN IF NOT EXISTS approved_by UUID NULL,
+            ADD COLUMN IF NOT EXISTS approval_date TIMESTAMP NULL,
+            ADD COLUMN IF NOT EXISTS registration_notes TEXT NULL;
+        """))
+        # Example: ensure students table has class_name
+        conn.execute(text("""
+            ALTER TABLE students
+            ADD COLUMN IF NOT EXISTS class_name TEXT NULL;
+        """))
 
-# Create global instance
-db_manager = DatabaseManager()
+# --- Safe seeding ---
+def seed_default_users():
+    """
+    Insert default users only if they don't already exist.
+    Uses ON CONFLICT DO NOTHING to avoid duplicate key errors.
+    """
+    engine = get_engine()
+    default_users = [
+        {
+            "id": "teacher_eric",  # fixed ID for known account
+            "full_name": "Joe Eric",
+            "email": "bamidelestephen224",
+            "password_hash": hash_password("admin789"),
+            "role": "principal",
+            "phone": "+234-XXX-XXX-XXXX",
+            "is_active": True,
+            "created_date": datetime.utcnow(),
+            "approval_status": "approved",
+            "approved_by": None,
+            "approval_date": None,
+            "registration_notes": None
+        }
+    ]
+    with engine.begin() as conn:
+        for user in default_users:
+            conn.execute(text("""
+                INSERT INTO users (
+                    id, full_name, email, password_hash, role, phone, is_active,
+                    created_date, approval_status, approved_by, approval_date, registration_notes
+                )
+                VALUES (
+                    :id, :full_name, :email, :password_hash, :role, :phone, :is_active,
+                    :created_date, :approval_status, :approved_by, :approval_date, :registration_notes
+                )
+                ON CONFLICT (id) DO NOTHING;
+            """), user)
 
-
-def init_db():
-    """Initialize database tables - standalone function"""
-    if not db_manager.is_available():
-        print("❌ Database not available, skipping table initialization")
-        return False
-    
-    try:
-        Base.metadata.create_all(bind=db_manager.engine)
-        print("✅ Database tables initialized successfully.")
-        return True
-    except OperationalError as e:
-        print(f"❌ Database initialization failed: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ Unexpected error during DB init: {e}")
-        return False
-
-
-if __name__ == "__main__":
-    init_db()
+# --- Combined init ---
+def init_database():
+    """
+    Run schema checks and seed default users.
+    Call this once at app startup.
+    """
+    ensure_schema()
+    seed_default_users()
+    st.info("✅ Database schema ensured and default users seeded.")
