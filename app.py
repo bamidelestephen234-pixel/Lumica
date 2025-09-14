@@ -7505,38 +7505,11 @@ if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
 # ✅ Fallback so st.tabs never gets an empty list
 if not available_tabs:
     available_tabs = [("🏠 Home", "home")]
-
-        
-
-        # Generate Reports
-        if check_user_feature_access(st.session_state.teacher_id, "report_generation"):
-            available_tabs.append(("📝 Generate Reports", "reports"))
-
-        # Draft Reports
-        if check_user_feature_access(st.session_state.teacher_id, "draft_management"):
-            available_tabs.append(("📝 Draft Reports", "drafts"))
-
-        # Student Database
-        if check_user_feature_access(st.session_state.teacher_id, "student_database"):
-            available_tabs.append(("👥 Student Database", "database"))
-
-        # Analytics
-        if check_user_feature_access(st.session_state.teacher_id, "analytics_dashboard"):
-            available_tabs.append(("📊 Analytics", "analytics"))
-
-        # Verification
-        if check_user_feature_access(st.session_state.teacher_id, "verification_system"):
-            available_tabs.append(("🔍 Verify Reports", "verify"))
-
-        # Admin Panel
-        if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
-            available_tabs.append(("⚙️ Admin Panel", "admin"))
-
-        # Create tabs
-        tab_names = [tab[0] for tab in available_tabs]
-        tab_keys = [tab[1] for tab in available_tabs]
-
-        tabs = st.tabs(tab_names)
+    
+# Create tabs
+tab_names = [tab[0] for tab in available_tabs]
+tab_keys = [tab[1] for tab in available_tabs]
+   tabs = st.tabs(tab_names)
 
         for i, (tab_name, tab_key) in enumerate(available_tabs):
             with tabs[i]:
