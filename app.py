@@ -58,6 +58,31 @@ def init_sql_connection():
     except Exception as e:
         print(f"Failed to initialize SQL connection: {e}")
         return None
+from sqlalchemy import text
+
+def add_audit_log(user_id, action, details):
+    """Insert an audit log entry into the audit_logs table."""
+    session = get_session()
+    try:
+        session.execute(
+            text("""
+                INSERT INTO audit_logs (user_id, action, details, timestamp)
+                VALUES (:user_id, :action, :details, :timestamp)
+            """),
+            {
+                "user_id": user_id,
+                "action": action,
+                "details": details,
+                "timestamp": datetime.utcnow()
+            }
+        )
+        session.commit()
+    except Exception as e:
+        print(f"Error adding audit log: {e}")
+    finally:
+        session.close()
+
+
 
 def get_healthy_sql_connection():
     """Get a healthy SQL connection with automatic stale connection detection"""
