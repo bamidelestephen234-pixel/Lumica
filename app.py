@@ -7466,13 +7466,19 @@ def report_generator_page():
                 del st.session_state[key]
             st.rerun()
     # Get the current user's role from the database/session
+# Get the current user's role from the database/session
 users_db = load_user_database()
-user_info = users_db.get(st.session_state.teacher_id, {})
-current_role = user_info.get("role", "").strip()
 
+if "teacher_id" in st.session_state:
+    user_info = users_db.get(st.session_state.teacher_id, {})
+    current_role = user_info.get("role", "").strip()
+else:
+    st.warning("No teacher is logged in. Please log in first.")
+    st.stop()
 
-    # Staff interface with feature-based access control
+# Staff interface with feature-based access control
 available_tabs = []
+
 
 # ✅ Ensure Administrator role always gets the Admin Panel tab
 if current_role and current_role.lower() == "administrator":
