@@ -7504,12 +7504,11 @@ if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
 
 # ✅ Fallback so st.tabs never gets an empty list
 if not available_tabs:
-    available_tabs = [("🏠 Home", "home")]
-    
+    available_tabs = [("🏠 Home", "home")]  
 # Create tabs
 tab_names = [tab[0] for tab in available_tabs]
 tab_keys = [tab[1] for tab in available_tabs]
-   tabs = st.tabs(tab_names)
+tabs = st.tabs(tab_names)
 
         for i, (tab_name, tab_key) in enumerate(available_tabs):
             with tabs[i]:
