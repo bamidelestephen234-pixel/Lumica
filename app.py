@@ -185,22 +185,10 @@ try:
 except ImportError:
     EMAIL_AVAILABLE = False
 
+# Import password functions from utils.security module
+from utils.security import hash_password, verify_password
+
 # Subjects list
-# Utility functions - defined early for use throughout the app
-def hash_password(password: str) -> str:
-    salt = secrets.token_hex(16)
-    pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
-    return salt + pwd_hash.hex()
-
-def verify_password(password: str, hashed: str) -> bool:
-    try:
-        salt = hashed[:32]
-        stored_hash = hashed[32:]
-        pwd_hash = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000)
-        return pwd_hash.hex() == stored_hash
-    except:
-        return False
-
 subjects = sorted([
     "English", "Maths", "French", "C.C Art", "Business Studies", "Economics",
     "Yoruba", "physics", "chemistry", "Biology", "Further Mathematics",
@@ -7151,14 +7139,15 @@ def init_database_tables():
         # Activation keys table
         try:
             keys_sql = text("""
-                CREATE TABLE IF NOT EXISTS activationkeys (
+                CREATE TABLE IF NOT EXISTS activation_keys (
                     id TEXT PRIMARY KEY,
                     key_value TEXT UNIQUE NOT NULL,
                     school_name TEXT,
                     subscription_type TEXT DEFAULT 'monthly',
                     is_active BOOLEAN DEFAULT true,
                     expires_at TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    deactivated_by TEXT
                 )
             """)
             session.execute(keys_sql)
@@ -7205,6 +7194,12 @@ def init_database_tables():
             migration_sql2 = text("ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP")
             session.execute(migration_sql2)
             session.commit()
+            
+            # Add missing columns to activation_keys table
+            migration_sql3 = text("ALTER TABLE activation_keys ADD COLUMN IF NOT EXISTS deactivated_by TEXT")
+            session.execute(migration_sql3)
+            session.commit()
+            
             print("✅ Authentication columns ensured")
         except Exception as e:
             print(f"⚠️ Authentication column migration issue: {e}")
@@ -7215,7 +7210,7 @@ def init_database_tables():
             for index_sql_str in [
                 "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
                 "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)", 
-                "CREATE INDEX IF NOT EXISTS idx_activationkeys_active ON activationkeys(is_active)",
+                "CREATE INDEX IF NOT EXISTS idx_activationkeys_active ON activation_keys(is_active)",
                 "CREATE INDEX IF NOT EXISTS idx_students_class ON students(class_name)"
             ]:
                 session.execute(text(index_sql_str))
