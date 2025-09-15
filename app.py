@@ -493,7 +493,9 @@ def save_user_database(users_db):
             check_sql = text("SELECT id FROM users WHERE id = :user_id")
             existing_df = query_with_retry(check_sql, {'user_id': user_id})
 
-            current_time = datetime.utcnow()
+            from datetime import datetime, timezone
+            current_time = datetime.now(timezone.utc)
+
 
             if not existing_df.empty:
                 # Update existing user
