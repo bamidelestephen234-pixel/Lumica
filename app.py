@@ -64,7 +64,7 @@ def get_healthy_sql_connection():
     conn = init_sql_connection()
     if not conn:
         return None
-    
+
     try:
         # Health check - try a simple query
         conn.query("SELECT 1", ttl=0)  # No cache for health check
@@ -82,20 +82,20 @@ def query_with_retry(sql, params=None, retries=3, ttl=300):
             conn = get_healthy_sql_connection()
             if not conn:
                 raise Exception("No database connection available")
-            
+
             # Convert SQLAlchemy text() objects to strings for Streamlit caching compatibility
             sql_str = str(sql) if hasattr(sql, 'text') else sql
-            
+
             if params:
                 return conn.query(sql_str, params=params, ttl=ttl)
             else:
                 return conn.query(sql_str, ttl=ttl)
-                
+
         except Exception as e:
             if attempt == retries - 1:
                 print(f"Final database query attempt failed: {e}")
                 raise e
-            
+
             print(f"Database query attempt {attempt + 1} failed: {e}, retrying...")
             # Clear cache and retry
             st.cache_resource.clear()
@@ -108,7 +108,7 @@ def execute_sql_with_retry(sql, params=None, retries=3):
             conn = get_healthy_sql_connection()
             if not conn:
                 raise Exception("No database connection available")
-            
+
             # For execute operations, we need to use the underlying connection
             if hasattr(conn, 'session'):
                 with conn.session as session:
@@ -126,16 +126,16 @@ def execute_sql_with_retry(sql, params=None, retries=3):
                 except:
                     # If that fails, just return True to continue - table likely already exists
                     return True
-                
+
         except Exception as e:
             if attempt == retries - 1:
                 print(f"Final database execute attempt failed: {e}")
                 return False
-            
+
             print(f"Database execute attempt {attempt + 1} failed: {e}, retrying...")
             st.cache_resource.clear()
             time.sleep(1)
-    
+
     return False
 
 # ============================================================================
@@ -211,6 +211,15 @@ subjects = sorted([
 
 # User roles and permissions
 USER_ROLES = {
+    "developer": {
+        "level": 7,
+        "permissions": ["super_admin", "all_access", "system_control", "activation_settings", "user_management", "system_config", "backup_restore", "data_export", "report_generation", "student_management", "department_reports"],
+        "description": "Developer - Full system control and activation management",
+        "default_features": [
+            "developer_console", "report_generation", "draft_management", "student_database", 
+            "analytics_dashboard", "verification_system", "admin_panel"
+        ]
+    },
     "principal": {
         "level": 5,
         "permissions": ["all_access", "user_management", "system_config", "backup_restore", "data_export"],
@@ -255,6 +264,11 @@ USER_ROLES = {
 
 # Available system features
 SYSTEM_FEATURES = {
+    "developer_console": {
+        "name": "🛠️ Developer Console",
+        "description": "System activation controls, user management, and developer tools",
+        "required_permission": "system_control"
+    },
     "report_generation": {
         "name": "📝 Generate Reports",
         "description": "Create and generate student report cards",
@@ -295,7 +309,7 @@ def load_user_database():
     """Load user database using Streamlit SQL Connection - PRODUCTION READY for Streamlit Cloud"""
     try:
         print("🔄 Loading users from database...")
-        
+
         # Query users using the new Streamlit SQL approach
         users_df = query_with_retry("""
             SELECT id, password_hash, role, full_name, email, phone, 
@@ -304,11 +318,11 @@ def load_user_database():
             FROM users 
             WHERE id IS NOT NULL
         """, ttl=60)  # Cache for 1 minute
-        
+
         if users_df.empty:
             print("⚠️ No users found in database")
             return {}
-        
+
         # Convert DataFrame to the dict format expected by the app
         user_dict = {}
         for _, row in users_df.iterrows():
@@ -334,20 +348,20 @@ def load_user_database():
                 "approval_date": row['approval_date'].isoformat() if row['approval_date'] else None,
                 "registration_notes": row['registration_notes']
             }
-        
+
         print(f"✅ Successfully loaded {len(user_dict)} users from database")
         return user_dict
-        
+
     except Exception as e:
         print(f"❌ Failed to load users from database: {e}")
         print("⚠️ CRITICAL: Cannot access user database - authentication will not work")
-        
+
         # Show error in UI if in Streamlit context
         try:
             st.error("🔌 Database connection issue. Please refresh the page or contact support.")
         except:
             pass
-        
+
         return {}
 
 def load_user_database_fallback():
@@ -440,14 +454,14 @@ def save_user_database(users_db):
         if not conn:
             print("❌ No database connection for save_user_database")
             return False
-        
+
         for user_id, data in users_db.items():
             # Check if user exists
             check_sql = text("SELECT id FROM users WHERE id = :user_id")
             existing_df = query_with_retry(check_sql, {'user_id': user_id})
-            
+
             current_time = datetime.utcnow()
-            
+
             if not existing_df.empty:
                 # Update existing user
                 update_sql = text("""
@@ -465,11 +479,11 @@ def save_user_database(users_db):
                         registration_notes = :registration_notes
                     WHERE id = :user_id
                 """)
-                
+
                 approval_date = None
                 if data.get("approval_date"):
                     approval_date = datetime.fromisoformat(data["approval_date"]) if isinstance(data["approval_date"], str) else data["approval_date"]
-                
+
                 params = {
                     'user_id': user_id,
                     'full_name': data["full_name"],
@@ -493,11 +507,11 @@ def save_user_database(users_db):
                     VALUES (:id, :full_name, :email, :password_hash, :role, :phone, :is_active, 
                            :created_date, :approval_status, :approved_by, :approval_date, :registration_notes)
                 """)
-                
+
                 approval_date = None
                 if data.get("approval_date"):
                     approval_date = datetime.fromisoformat(data["approval_date"]) if isinstance(data["approval_date"], str) else data["approval_date"]
-                
+
                 params = {
                     'id': user_id if user_id else str(uuid.uuid4()),
                     'full_name': data["full_name"],
@@ -513,7 +527,7 @@ def save_user_database(users_db):
                     'registration_notes': data.get("registration_notes")
                 }
                 execute_sql_with_retry(insert_sql, params)
-        
+
         print(f"✅ Saved {len(users_db)} users using new SQL connection")
         return True
     except Exception as e:
@@ -523,6 +537,10 @@ def save_user_database(users_db):
 def check_user_permissions(user_id, required_permission):
     """Check if user has required permission"""
     try:
+        # Developer bypass - allow all permissions for authenticated developers  
+        if st.session_state.get("developer_authenticated") and user_id == "developer_001":
+            return True
+            
         users_db = load_user_database()
         if user_id not in users_db:
             return False
@@ -541,6 +559,10 @@ def check_user_permissions(user_id, required_permission):
 def check_user_feature_access(user_id, feature_key):
     """Check if user has access to a specific system feature"""
     try:
+        # Developer bypass - allow all features for authenticated developers
+        if st.session_state.get("developer_authenticated") and user_id == "developer_001":
+            return True
+            
         users_db = load_user_database()
         if user_id not in users_db:
             return False
@@ -578,24 +600,24 @@ def is_user_locked(user_id):
         if not conn:
             print(f"❌ No database connection for is_user_locked: {user_id}")
             return False
-        
+
         # Get lock status
         check_sql = text("SELECT locked_until, failed_attempts FROM users WHERE id = :user_id")
         result_df = query_with_retry(check_sql, {'user_id': user_id})
-        
+
         if result_df.empty:
             return False
-        
+
         user = result_df.iloc[0]
         locked_until = user.get('locked_until')
-        
+
         if locked_until:
             # Convert to datetime if it's a string
             if isinstance(locked_until, str):
                 lock_time = datetime.fromisoformat(locked_until)
             else:
                 lock_time = locked_until
-                
+
             if datetime.now() > lock_time:
                 # Auto-unlock user
                 unlock_sql = text("""
@@ -604,7 +626,7 @@ def is_user_locked(user_id):
                         failed_attempts = 0
                     WHERE id = :user_id
                 """)
-                
+
                 success = execute_sql_with_retry(unlock_sql, {'user_id': user_id})
                 if success:
                     print(f"✅ Auto-unlocked user {user_id}")
@@ -622,23 +644,23 @@ def increment_failed_attempts(user_id):
         if not conn:
             print(f"❌ No database connection for increment_failed_attempts: {user_id}")
             return
-        
+
         # Get current failed attempts
         check_sql = text("SELECT failed_attempts FROM users WHERE id = :user_id")
         result_df = query_with_retry(check_sql, {'user_id': user_id})
-        
+
         if result_df.empty:
             print(f"⚠️ User not found for failed attempts: {user_id}")
             return
-        
+
         current_attempts = result_df.iloc[0]['failed_attempts'] if 'failed_attempts' in result_df.columns else 0
         new_attempts = (current_attempts or 0) + 1
-        
+
         # Lock account after 3 failed attempts
         locked_until = None
         if new_attempts >= 3:
             locked_until = datetime.now() + timedelta(minutes=30)
-        
+
         # Update failed attempts and lock status
         update_sql = text("""
             UPDATE users SET 
@@ -646,19 +668,19 @@ def increment_failed_attempts(user_id):
                 locked_until = :locked_until
             WHERE id = :user_id
         """)
-        
+
         params = {
             'user_id': user_id,
             'failed_attempts': new_attempts,
             'locked_until': locked_until
         }
-        
+
         success = execute_sql_with_retry(update_sql, params)
         if success:
             print(f"✅ Updated failed attempts for {user_id}: {new_attempts}")
         else:
             print(f"❌ Failed to update attempts for {user_id}")
-            
+
     except Exception as e:
         print(f"❌ Error incrementing failed attempts for {user_id}: {e}")
 
@@ -669,7 +691,7 @@ def reset_failed_attempts(user_id):
         if not conn:
             print(f"❌ No database connection for reset_failed_attempts: {user_id}")
             return
-        
+
         # Reset failed attempts, unlock account, and update last login
         update_sql = text("""
             UPDATE users SET 
@@ -678,18 +700,18 @@ def reset_failed_attempts(user_id):
                 last_login = :last_login
             WHERE id = :user_id
         """)
-        
+
         params = {
             'user_id': user_id,
             'last_login': datetime.now()
         }
-        
+
         success = execute_sql_with_retry(update_sql, params)
         if success:
             print(f"✅ Reset failed attempts for successful login: {user_id}")
         else:
             print(f"❌ Failed to reset attempts for {user_id}")
-            
+
     except Exception as e:
         print(f"❌ Error resetting failed attempts for {user_id}: {e}")
 
@@ -1990,18 +2012,18 @@ def check_activation_status():
     """Check if the system is activated by querying Supabase directly - PRODUCTION READY with robust retry logic"""
     max_retries = 3
     retry_delay = 1
-    
+
     for attempt in range(max_retries):
         try:
             # Try to establish database connection with retry logic
             current_db_manager = db_manager
-            
+
             if not DATABASE_AVAILABLE or not current_db_manager or not current_db_manager.is_available():
                 print(f"🔄 Attempting database connection for activation check (attempt {attempt + 1}/{max_retries})")
                 try:
                     from database.models import ActivationKey as ActivationKeyModel
                     from database.db_manager import DatabaseManager
-                    
+
                     # Create a fresh database manager instance for activation check
                     fresh_db_manager = DatabaseManager()
                     if fresh_db_manager.engine is not None and fresh_db_manager.is_available():
@@ -2023,26 +2045,26 @@ def check_activation_status():
                     else:
                         print(f"❌ Database connection failed after all retries: {e}")
                         return True, {"status": "database_connection_failed_allowing_access"}, None
-            
+
             # Query activation keys from database
             if current_db_manager and current_db_manager.is_available():
                 try:
                     # Import ActivationKey here to ensure it's available
                     if 'ActivationKeyModel' not in locals():
                         from database.models import ActivationKey as ActivationKeyModel
-                    
+
                     session = current_db_manager.get_session()
                     if session is None:
                         raise Exception("Could not create database session")
-                    
+
                     active_key = session.query(ActivationKeyModel).filter_by(is_active=True).first()
                     session.close()
-                    
+
                     if active_key:
                         # Check if the key has expired
                         if active_key.expires_at and active_key.expires_at < datetime.utcnow():
                             return False, {"status": "key_expired", "activation_key": active_key.key_value}, active_key.expires_at
-                        
+
                         # Key is active and not expired - system is activated
                         status = {
                             "activated": True,
@@ -2057,7 +2079,7 @@ def check_activation_status():
                         # No active key found in database
                         print("⚠️ No active activation key found in database")
                         return False, {"status": "no_active_key"}, None
-                        
+
                 except Exception as e:
                     if attempt < max_retries - 1:
                         print(f"❌ Database query error (attempt {attempt + 1}): {e}, retrying...")
@@ -2067,7 +2089,7 @@ def check_activation_status():
                         print(f"❌ Database query failed after all retries: {e}")
                         # Allow access on final database error to avoid blocking users
                         return True, {"status": "database_error_allowing_access"}, None
-            
+
         except Exception as e:
             if attempt < max_retries - 1:
                 print(f"❌ Activation check error (attempt {attempt + 1}): {e}, retrying...")
@@ -2077,7 +2099,7 @@ def check_activation_status():
                 print(f"❌ Activation check failed after all retries: {e}")
                 # Allow access on final error to avoid blocking users
                 return True, {"status": "error_allowing_access"}, None
-    
+
     # Fallback - should never reach here, but allow access if we do
     return True, {"status": "fallback_allowing_access"}, None
 
@@ -2089,18 +2111,18 @@ def is_activation_key_deactivated(activation_key):
         for attempt in range(max_retries):
             try:
                 current_db_manager = db_manager
-                
+
                 if not DATABASE_AVAILABLE or not current_db_manager or not current_db_manager.is_available():
                     from database.models import ActivationKey as ActivationKeyModel
                     from database.db_manager import DatabaseManager
                     current_db_manager = DatabaseManager()
-                
+
                 if current_db_manager and current_db_manager.is_available():
                     session = current_db_manager.get_session()
                     if session:
                         key = session.query(ActivationKeyModel).filter_by(key_value=activation_key).first()
                         session.close()
-                        
+
                         if key:
                             return not key.is_active  # Return True if key is deactivated (is_active = False)
                         else:
@@ -2109,7 +2131,7 @@ def is_activation_key_deactivated(activation_key):
                     if attempt < max_retries - 1:
                         time.sleep(1)
                         continue
-                    
+
             except Exception as e:
                 if attempt < max_retries - 1:
                     print(f"Database query attempt {attempt + 1} failed: {e}, retrying...")
@@ -2117,7 +2139,7 @@ def is_activation_key_deactivated(activation_key):
                     continue
                 else:
                     print(f"Error checking activation key status: {e}")
-                    
+
         # If database is completely unavailable, assume key is not deactivated to avoid blocking users
         return False
     except Exception:
@@ -2152,7 +2174,7 @@ def generate_activation_key(school_name=None, subscription_type="monthly", expir
     except ImportError:
         # Fallback for deployment environments
         return None
-    
+
     # Generate a 16-character activation key
     characters = string.ascii_uppercase + string.digits
     activation_key = ''.join(secrets.choice(characters) for _ in range(16))
@@ -2180,29 +2202,29 @@ def activate_system(activation_key, subscription_type="monthly"):
         try:
             # Try to get database connection
             current_db_manager = db_manager
-            
+
             if not DATABASE_AVAILABLE or not current_db_manager or not current_db_manager.is_available():
                 from database.models import ActivationKey as ActivationKeyModel
                 from database.db_manager import DatabaseManager
                 current_db_manager = DatabaseManager()
-            
+
             if not current_db_manager or not current_db_manager.is_available():
                 if attempt < max_retries - 1:
                     time.sleep(1)
                     continue
                 return False  # Database not available
-            
+
             session = current_db_manager.get_session()
             if not session:
                 if attempt < max_retries - 1:
                     time.sleep(1)
                     continue
                 return False
-            
+
             # Import ActivationKey here to ensure it's available
             if 'ActivationKeyModel' not in locals():
                 from database.models import ActivationKey as ActivationKeyModel
-            
+
             key = session.query(ActivationKeyModel).filter_by(key_value=activation_key).first()
 
             if not key:
@@ -2219,17 +2241,17 @@ def activate_system(activation_key, subscription_type="monthly"):
             key.is_active = True
             session.commit()
             session.close()
-            
+
             print(f"✅ System activated successfully with key: {activation_key}")
             return True
-            
+
         except Exception as e:
             print(f"❌ Activation attempt {attempt + 1} failed: {e}")
             if attempt < max_retries - 1:
                 time.sleep(1)
                 continue
             return False
-    
+
     return False
 
 def get_payment_instructions():
@@ -3048,30 +3070,33 @@ def login_page():
                 else:
                     st.error("🚨 Subscription expired - Grace period active")
 
-    # Create tabs for login and teacher registration
-    login_tab, register_tab = st.tabs(["🔐 Staff Login", "👨‍🏫 Teacher Registration"])
-    
+    # Create tabs for login, teacher registration, and developer login
+    login_tab, register_tab, developer_tab = st.tabs(["🔐 Staff Login", "👨‍🏫 Teacher Registration", "👨‍💻 Developer Login"])
+
     with login_tab:
         staff_login_form()
-    
+
     with register_tab:
         teacher_registration_form()
+        
+    with developer_tab:
+        developer_login_form()
 
 def teacher_registration_form():
     """Teacher self-registration form - requires approval from principal/admin"""
     with st.container():
         st.markdown("### 👨‍🏫 Teacher Registration")
         st.markdown("Register as a teacher. Your account will require approval from the principal or administrator.")
-        
+
         with st.form("teacher_registration_form"):
             col1, col2 = st.columns(2)
-            
+
             with col1:
                 reg_full_name = st.text_input("Full Name*", placeholder="John Doe")
                 reg_email = st.text_input("Email Address*", placeholder="teacher@example.com")
                 reg_phone = st.text_input("Phone Number", placeholder="+234 800 123 4567")
                 reg_password = st.text_input("Password*", type="password", placeholder="Enter secure password")
-            
+
             with col2:
                 reg_user_id = st.text_input("Desired User ID*", placeholder="teacher_john")
                 reg_confirm_password = st.text_input("Confirm Password*", type="password", placeholder="Confirm your password")
@@ -3080,11 +3105,11 @@ def teacher_registration_form():
                     ["SS1A", "SS1B", "SS1C", "SS2A", "SS2B", "SS2C", "SS3A", "SS3B", "SS3C",
                      "JSS1A", "JSS1B", "JSS1C", "JSS2A", "JSS2B", "JSS2C", "JSS3A", "JSS3B", "JSS3C"],
                     help="Select classes you'd prefer to teach")
-            
+
             reg_notes = st.text_area("Additional Information", 
                 placeholder="Brief note about your teaching experience, qualifications, etc.",
                 help="This information will help administrators evaluate your application")
-            
+
             col1, col2, col3 = st.columns([1, 1, 1])
             with col2:
                 if st.form_submit_button("📝 Submit Registration", use_container_width=True):
@@ -3102,18 +3127,18 @@ def teacher_registration_form():
                         errors.append("Passwords do not match")
                     if len(reg_password) < 6:
                         errors.append("Password must be at least 6 characters long")
-                    
+
                     # Check if user ID or email already exists
                     users_db = load_user_database()
                     if reg_user_id in users_db:
                         errors.append("User ID already exists")
-                    
+
                     # Check if email already exists
                     for user_id, user_data in users_db.items():
                         if user_data.get('email', '').lower() == reg_email.lower():
                             errors.append("Email address already registered")
                             break
-                    
+
                     if errors:
                         for error in errors:
                             st.error(f"❌ {error}")
@@ -3144,9 +3169,9 @@ def teacher_registration_form():
                                 "registration_notes": reg_notes,
                                 "subjects": reg_subjects
                             }
-                            
+
                             users_db[reg_user_id] = new_teacher
-                            
+
                             if save_user_database(users_db):
                                 st.success("✅ Registration submitted successfully!")
                                 st.info("""
@@ -3156,7 +3181,7 @@ def teacher_registration_form():
                                 - You will be notified once your account is approved
                                 - Check back here or contact the school administration for updates
                                 """)
-                                
+
                                 log_teacher_activity("system", "teacher_registration", {
                                     "registered_user": reg_user_id,
                                     "full_name": reg_full_name,
@@ -3164,13 +3189,55 @@ def teacher_registration_form():
                                     "timestamp": datetime.now().isoformat(),
                                     "status": "pending_approval"
                                 })
-                                
+
                                 # Clear form
                                 st.rerun()
                             else:
                                 st.error("❌ Registration failed. Please try again or contact administrator.")
                         except Exception as e:
                             st.error(f"❌ Registration error: {str(e)}")
+
+def developer_login_form():
+    """Developer login form with hardcoded password access"""
+    with st.container():
+        st.markdown("### 👨‍💻 Developer Access")
+        st.markdown("**Developer System Access** - Enter the master developer password to access system controls.")
+        
+        with st.form("developer_login_form"):
+            st.info("🔐 **Developer Authentication Required**")
+            developer_password = st.text_input("Developer Password", type="password", placeholder="Enter developer password")
+            
+            col1, col2, col3 = st.columns([1, 1, 1])
+            with col2:
+                if st.form_submit_button("🚀 Developer Login", use_container_width=True):
+                    # Check hardcoded developer password
+                    if developer_password == "Stephen@22":
+                        # Set developer session state
+                        st.session_state.developer_authenticated = True
+                        st.session_state.developer_id = "developer_001"
+                        st.session_state.authenticated = True
+                        st.session_state.teacher_id = "developer_001"
+                        st.session_state.user_role = "developer"
+                        st.session_state.user_permissions = ["super_admin", "all_access", "system_control", "activation_settings"]
+                        st.session_state.last_activity = datetime.now()
+                        
+                        # Log successful developer login
+                        create_audit_log("developer_login_success", "developer_001", {
+                            "login_method": "developer_password",
+                            "timestamp": datetime.now().isoformat(),
+                            "access_level": "full_system_control"
+                        }, "authentication")
+                        
+                        st.success("✅ Developer access granted!")
+                        st.info("🔄 Redirecting to developer console...")
+                        st.rerun()
+                    else:
+                        st.error("❌ Invalid developer password.")
+                        # Log failed developer login attempt
+                        create_audit_log("developer_login_failed", "unknown", {
+                            "timestamp": datetime.now().isoformat(),
+                            "attempted_password_length": len(developer_password) if developer_password else 0
+                        }, "security")
 
 def show_activation_required_page():
     """Show activation required page with payment instructions"""
@@ -3540,7 +3607,7 @@ def show_activation_required_page():
             if activate_system(activation_key):
                 st.success("🎉 System activated successfully!")
                 st.balloons()
-                
+
                 # Clear ALL session states to force fresh activation check
                 keys_to_clear = [
                     'generated_activation_key', 'generated_for_school', 'just_generated',
@@ -3549,11 +3616,11 @@ def show_activation_required_page():
                 for key in keys_to_clear:
                     if key in st.session_state:
                         del st.session_state[key]
-                
+
                 # Set activation flag in session state to help with fresh check
                 st.session_state.activated = True
                 st.session_state.show_activation = False
-                
+
                 # Clear any Streamlit caches
                 try:
                     if hasattr(st, 'cache_data'):
@@ -3562,7 +3629,7 @@ def show_activation_required_page():
                         st.experimental_memo.clear()
                 except:
                     pass  # Ignore cache clear errors
-                
+
                 st.info("🔄 Redirecting to login page...")
                 st.rerun()
             else:
@@ -3646,7 +3713,7 @@ def staff_login_form():
             # First, try to find by exact user ID (for backwards compatibility)
             if user_input in users_db:
                 return user_input, users_db[user_input]
-            
+
             # Search by email OR by id field within user data (for Supabase UUID keys)
             for user_id, user_data in users_db.items():
                 # Check by email
@@ -3658,7 +3725,7 @@ def staff_login_form():
                 # Check by username field if it exists
                 if user_data.get('username', '').lower() == user_input.lower():
                     return user_id, user_data
-            
+
             return None, None
 
         # Check if user account is locked (try to find user first)
@@ -3690,12 +3757,12 @@ def staff_login_form():
                                 st.warning("⏳ **Account Pending Approval**")
                                 st.info("""
                                 Your teacher registration is currently pending approval from the school administration.
-                                
+
                                 **What happens next:**
                                 - The principal or administrator will review your application
                                 - You'll be notified once your account is approved
                                 - Contact the school administration if you need updates
-                                
+
                                 **Need help?** Contact the school office for assistance.
                                 """)
                                 return
@@ -3704,13 +3771,13 @@ def staff_login_form():
                                 st.error("❌ **Account Application Rejected**")
                                 st.info(f"""
                                 Your teacher registration was not approved by the administration.
-                                
+
                                 **Reason:** {rejection_reason}
-                                
+
                                 Please contact the school administration for more information or to reapply.
                                 """)
                                 return
-                            
+
                             # Check 2FA if enabled
                             if user.get('two_factor_enabled', False):
                                 st.session_state.pending_2fa = found_user_id
@@ -4792,7 +4859,125 @@ def verification_tab():
         else:
             st.warning("⚠️ Please enter a Report ID")
 
-
+def developer_console_tab():
+    """Developer Console with system activation controls and management features"""
+    st.subheader("🛠️ Developer Console")
+    
+    # Check developer authentication
+    if not st.session_state.get("developer_authenticated"):
+        st.error("🚫 Developer access required")
+        return
+    
+    st.success("🔓 **Developer Mode Active** - Full system control enabled")
+    
+    # Create tabs for different developer functions
+    dev_tabs = st.tabs([
+        "🔄 System Activation", 
+        "👥 User Management", 
+        "📊 System Status", 
+        "🔧 Configuration",
+        "📋 System Logs"
+    ])
+    
+    with dev_tabs[0]:  # System Activation
+        st.markdown("### 🔄 System Activation Control")
+        st.info("Control global system access for all teacher users")
+        
+        # Get current activation status from session state (fallback)
+        current_activation = st.session_state.get("system_activated", True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("✅ Activate System", type="primary", use_container_width=True):
+                st.session_state.system_activated = True
+                st.success("🟢 System ACTIVATED - All teacher features enabled")
+                st.rerun()
+        
+        with col2:
+            if st.button("🚫 Deactivate System", type="secondary", use_container_width=True):
+                st.session_state.system_activated = False
+                st.error("🔴 System DEACTIVATED - Teacher access blocked")
+                st.warning("Only developers can reactivate the system")
+                st.rerun()
+        
+        # Show current status
+        if current_activation:
+            st.success("✅ **SYSTEM STATUS: ACTIVE** - All teacher features available")
+        else:
+            st.error("🚫 **SYSTEM STATUS: DEACTIVATED** - Teacher access blocked")
+            st.markdown("**Message shown to teachers:** 🚫 System deactivated. Please contact the developer to renew your subscription.")
+    
+    with dev_tabs[1]:  # User Management
+        st.markdown("### 👥 Developer User Management")
+        st.info("Advanced user controls and approvals")
+        
+        # Show all users from database
+        users_db = load_user_database()
+        
+        if users_db:
+            st.markdown("**Current Users:**")
+            users_df = pd.DataFrame([
+                {
+                    "User ID": user_id,
+                    "Name": user_data.get("full_name", "N/A"),
+                    "Role": user_data.get("role", "N/A"),
+                    "Email": user_data.get("email", "N/A"),
+                    "Active": "✅" if user_data.get("active", True) else "❌",
+                    "Approval": user_data.get("approval_status", "approved")
+                }
+                for user_id, user_data in users_db.items()
+            ])
+            st.dataframe(users_df, use_container_width=True)
+        else:
+            st.warning("No users found in database")
+    
+    with dev_tabs[2]:  # System Status  
+        st.markdown("### 📊 System Status Dashboard")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("System Status", "🟢 ACTIVE" if current_activation else "🔴 INACTIVE")
+        
+        with col2:
+            user_count = len(load_user_database()) if load_user_database() else 0
+            st.metric("Total Users", user_count)
+        
+        with col3:
+            st.metric("Developer Mode", "🔓 ENABLED")
+    
+    with dev_tabs[3]:  # Configuration
+        st.markdown("### 🔧 System Configuration")
+        st.info("Developer-only system settings")
+        
+        # Feature toggles
+        st.markdown("**System Features:**")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            pdf_enabled = st.checkbox("📄 PDF Generation", value=True, help="Enable PDF report generation")
+            email_enabled = st.checkbox("📧 Email System", value=True, help="Enable email notifications")
+            
+        with col2:
+            backup_enabled = st.checkbox("💾 Auto Backup", value=True, help="Enable automatic backups")
+            audit_enabled = st.checkbox("📋 Audit Logging", value=True, help="Enable audit trail logging")
+    
+    with dev_tabs[4]:  # System Logs
+        st.markdown("### 📋 System Logs")
+        st.info("View system activity and debug information")
+        
+        # Show recent audit logs if available
+        try:
+            audit_logs = get_audit_logs()
+            if audit_logs:
+                st.markdown("**Recent System Activity:**")
+                logs_df = pd.DataFrame(audit_logs[:20])  # Show last 20 entries
+                st.dataframe(logs_df, use_container_width=True)
+            else:
+                st.warning("No audit logs available")
+        except Exception as e:
+            st.error(f"Error loading logs: {str(e)}")
 
 def admin_panel_tab():
     st.subheader("⚙️ Admin Panel")
@@ -4879,26 +5064,26 @@ def admin_panel_tab():
 
         # Load users database for pending approvals
         users_db = load_user_database()
-        
+
         # Pending Teacher Approvals
         pending_teachers = {user_id: user for user_id, user in users_db.items() 
                           if user.get('approval_status') == 'pending'}
-        
+
         if pending_teachers:
             with st.expander(f"⏳ Pending Teacher Approvals ({len(pending_teachers)})", expanded=True):
                 st.markdown("**Teachers awaiting approval:**")
-                
+
                 for user_id, teacher in pending_teachers.items():
                     with st.container():
                         st.markdown("---")
                         col1, col2, col3 = st.columns([3, 1, 1])
-                        
+
                         with col1:
                             st.write(f"**👨‍🏫 {teacher.get('full_name', 'Unknown')}**")
                             st.write(f"📧 {teacher.get('email', 'No email')}")
                             st.write(f"📱 {teacher.get('phone', 'No phone')}")
                             st.write(f"📅 Applied: {teacher.get('created_date', 'Unknown')}")
-                            
+
                             # Show subjects and classes
                             subjects_list = teacher.get('subjects', [])
                             classes_list = teacher.get('assigned_classes', [])
@@ -4906,12 +5091,12 @@ def admin_panel_tab():
                                 st.write(f"📚 Subjects: {', '.join(subjects_list)}")
                             if classes_list:
                                 st.write(f"🏫 Preferred Classes: {', '.join(classes_list)}")
-                            
+
                             # Show registration notes
                             notes = teacher.get('registration_notes', '')
                             if notes:
                                 st.write(f"📝 Notes: {notes}")
-                        
+
                         with col2:
                             if st.button("✅ Approve", key=f"approve_{user_id}", type="primary"):
                                 # Approve the teacher
@@ -4919,7 +5104,7 @@ def admin_panel_tab():
                                 users_db[user_id]['approved_by'] = st.session_state.teacher_id
                                 users_db[user_id]['approval_date'] = datetime.now().isoformat()
                                 users_db[user_id]['active'] = True  # Activate account
-                                
+
                                 if save_user_database(users_db):
                                     st.success(f"✅ Teacher {teacher.get('full_name')} approved!")
                                     log_teacher_activity(st.session_state.teacher_id, "teacher_approved", {
@@ -4931,20 +5116,20 @@ def admin_panel_tab():
                                     st.rerun()
                                 else:
                                     st.error("❌ Error approving teacher")
-                        
+
                         with col3:
                             if st.button("❌ Reject", key=f"reject_{user_id}", type="secondary"):
                                 # Show rejection reason dialog
                                 st.session_state[f'show_reject_reason_{user_id}'] = True
                                 st.rerun()
-                        
+
                         # Handle rejection reason dialog
                         if st.session_state.get(f'show_reject_reason_{user_id}', False):
                             with st.form(f"reject_form_{user_id}"):
                                 st.write("**Reason for rejection:**")
                                 reject_reason = st.text_area("Rejection Reason", 
                                     placeholder="Please provide a reason for rejection")
-                                
+
                                 col1, col2 = st.columns(2)
                                 with col1:
                                     if st.form_submit_button("❌ Confirm Rejection"):
@@ -4952,7 +5137,7 @@ def admin_panel_tab():
                                         users_db[user_id]['approved_by'] = st.session_state.teacher_id
                                         users_db[user_id]['approval_date'] = datetime.now().isoformat()
                                         users_db[user_id]['rejection_reason'] = reject_reason
-                                        
+
                                         if save_user_database(users_db):
                                             st.success(f"Teacher {teacher.get('full_name')} application rejected.")
                                             log_teacher_activity(st.session_state.teacher_id, "teacher_rejected", {
@@ -4966,7 +5151,7 @@ def admin_panel_tab():
                                             st.rerun()
                                         else:
                                             st.error("❌ Error rejecting teacher")
-                                
+
                                 with col2:
                                     if st.form_submit_button("Cancel"):
                                         st.session_state[f'show_reject_reason_{user_id}'] = False
@@ -7158,6 +7343,10 @@ def report_generator_page():
         if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
             available_tabs.append(("⚙️ Admin Panel", "admin"))
 
+        # Developer Console  
+        if check_user_feature_access(st.session_state.teacher_id, "developer_console"):
+            available_tabs.append(("🛠️ Developer Console", "developer"))
+
         # Create tabs
         tab_names = [tab[0] for tab in available_tabs]
         tab_keys = [tab[1] for tab in available_tabs]
@@ -7179,23 +7368,25 @@ def report_generator_page():
                     verification_tab()
                 elif tab_key == "admin":
                     admin_panel_tab()
+                elif tab_key == "developer":
+                    developer_console_tab()
 
 def init_database_tables():
     """Initialize database tables using Streamlit SQL Connection - PRODUCTION READY"""
     try:
         print("🔄 Initializing database tables...")
-        
+
         conn = get_healthy_sql_connection()
         if not conn:
             print("❌ No database connection available for initialization")
             return False
-        
+
         # Create tables using execute operations (not query)
         tables_created = 0
-        
+
         # Get the underlying session for DDL operations
         session = conn.session
-        
+
         # Users table
         try:
             users_sql = text("""
@@ -7222,7 +7413,7 @@ def init_database_tables():
         except Exception as e:
             print(f"⚠️ Users table creation issue: {e}")
             session.rollback()
-        
+
         # Activation keys table
         try:
             keys_sql = text("""
@@ -7243,7 +7434,7 @@ def init_database_tables():
         except Exception as e:
             print(f"⚠️ Activation keys table creation issue: {e}")
             session.rollback()
-        
+
         # Students table
         try:
             students_sql = text("""
@@ -7270,13 +7461,13 @@ def init_database_tables():
         except Exception as e:
             print(f"⚠️ Students table creation issue: {e}")
             session.rollback()
-        
+
         # Add missing authentication columns if they don't exist
         try:
             migration_sql = text("ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_attempts INTEGER DEFAULT 0")
             session.execute(migration_sql)
             session.commit()
-            
+
             migration_sql2 = text("ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP")
             session.execute(migration_sql2)
             session.commit()
@@ -7299,10 +7490,10 @@ def init_database_tables():
         except Exception as e:
             print(f"⚠️ Index creation issue: {e}")
             session.rollback()
-        
+
         print(f"✅ Database initialization complete - {tables_created} tables ready")
         return True
-        
+
     except Exception as e:
         print(f"❌ Database initialization failed: {e}")
         return False
@@ -7312,12 +7503,12 @@ def seed_default_users():
     try:
         # Check if users exist
         users_df = query_with_retry("SELECT COUNT(*) as count FROM users", ttl=0)
-        
+
         if users_df is not None and not users_df.empty:
             user_count = users_df.iloc[0]['count']
             if user_count == 0:
                 print("🌱 Seeding default users...")
-                
+
                 # Insert default admin user using the existing hash_password function
                 default_users = [
                     {
@@ -7329,7 +7520,7 @@ def seed_default_users():
                         'phone': '+234-XXX-XXX-XXXX'
                     }
                 ]
-                
+
                 conn = get_healthy_sql_connection()
                 for user in default_users:
                     password_hash = hash_password(user['password'])
@@ -7351,11 +7542,11 @@ def seed_default_users():
                         print(f"✅ Created default user: {user['email']}")
                     except Exception as e:
                         print(f"⚠️ Error creating user {user['email']}: {e}")
-                
+
                 print("✅ Default users seeded successfully")
             else:
                 print(f"✅ Found {user_count} existing users, skipping seed")
-        
+
     except Exception as e:
         print(f"⚠️ Error checking/seeding users: {e}")
 
