@@ -7386,14 +7386,12 @@ if not available_tabs:
 tab_names = [tab[0] for tab in available_tabs]
 tab_keys = [tab[1] for tab in available_tabs]
 tabs = st.tabs(tab_names)
-
-
     # Check session timeout
-    if check_session_timeout():
-        st.error("🔒 Session expired. Please login again.")
-        st.session_state.authenticated = False
-        st.session_state.teacher_id = None
-        st.rerun()
+if check_session_timeout():
+    st.error("🔒 Session expired. Please login again.")
+    st.session_state.authenticated = False
+    st.session_state.teacher_id = None
+    st.rerun()
 
     # Update activity
     update_session_activity()
