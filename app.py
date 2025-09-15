@@ -695,7 +695,7 @@ def save_user_database(users_db):
                     'is_active': data["active"],
                     'last_login': current_time,
                     'approval_status': data.get("approval_status", "approved"),
-                    'approved_by': data.get("approved_by"),
+                    'approved_by': (None if not _is_valid_uuid(data.get("approved_by")) else data.get("approved_by")),
                     'approval_date': approval_date,
                     'registration_notes': data.get("registration_notes")
                 }
@@ -729,7 +729,7 @@ def save_user_database(users_db):
                     'is_active': data["active"],
                     'created_date': current_time,
                     'approval_status': approval_status,
-                    'approved_by': data.get("approved_by"),
+                    'approved_by': (None if not _is_valid_uuid(data.get("approved_by")) else data.get("approved_by")),
                     'approval_date': approval_date,
                     'registration_notes': data.get("registration_notes")
                 }
@@ -1930,6 +1930,17 @@ def assign_grade(score):
         return "E"
     else:
         return "F"
+
+def _is_valid_uuid(val):
+    """Return True if val is a valid UUID string, otherwise False."""
+    try:
+        if not val:
+            return False
+        import uuid as _uuid
+        _uuid.UUID(str(val))
+        return True
+    except Exception:
+        return False
 
 def get_logo_base64(uploaded_file=None):
     try:
@@ -3366,7 +3377,7 @@ def teacher_registration_form():
 
             col1, col2, col3 = st.columns([1, 1, 1])
             with col2:
-                if st.form_submit_button("📝 Submit Registration", use_container_width=True):
+                if st.form_submit_button("📝 Submit Registration", width='stretch'):
                     # Validation
                     errors = []
                     if not reg_full_name:
@@ -3473,7 +3484,7 @@ def developer_login_form():
             
             col1, col2, col3 = st.columns([1, 1, 1])
             with col2:
-                if st.form_submit_button("🚀 Developer Login", use_container_width=True):
+                if st.form_submit_button("🚀 Developer Login", width='stretch'):
                     # Check hardcoded developer password
                     if developer_password == "Stephen@22":
                         # Set developer session state
@@ -5159,13 +5170,13 @@ def developer_console_tab():
         col1, col2 = st.columns(2)
         
         with col1:
-            if st.button("✅ Activate System", type="primary", use_container_width=True):
+            if st.button("✅ Activate System", type="primary", width='stretch'):
                 st.session_state.system_activated = True
                 st.success("🟢 System ACTIVATED - All teacher features enabled")
                 st.rerun()
         
         with col2:
-            if st.button("🚫 Deactivate System", type="secondary", use_container_width=True):
+            if st.button("🚫 Deactivate System", type="secondary", width='stretch'):
                 st.session_state.system_activated = False
                 st.error("🔴 System DEACTIVATED - Teacher access blocked")
                 st.warning("Only developers can reactivate the system")
@@ -5198,7 +5209,7 @@ def developer_console_tab():
                 }
                 for user_id, user_data in users_db.items()
             ])
-            st.dataframe(users_df, use_container_width=True)
+            st.dataframe(users_df, width='stretch')
         else:
             st.warning("No users found in database")
     
@@ -5243,7 +5254,7 @@ def developer_console_tab():
             if audit_logs:
                 st.markdown("**Recent System Activity:**")
                 logs_df = pd.DataFrame(audit_logs[:20])  # Show last 20 entries
-                st.dataframe(logs_df, use_container_width=True)
+                st.dataframe(logs_df, width='stretch')
             else:
                 st.warning("No audit logs available")
         except Exception as e:
