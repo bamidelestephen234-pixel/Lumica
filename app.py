@@ -1,10 +1,129 @@
-"""
-=====================================================
-AKIN'S SUNRISE SCHOOL REPORT CARD MANAGEMENT SYSTEM
-=====================================================
-School Management System - Report Card Generator
-Author: School Administration
-"""
+def developer_console_ui():
+    st.header("🛠️ Developer Console")
+    st.markdown("## Pending Teacher Approvals")
+    pending_teachers = get_pending_teacher_approvals()
+    if pending_teachers is not None and not pending_teachers.empty:
+        for _, teacher in pending_teachers.iterrows():
+            col1, col2, col3 = st.columns([3, 2, 2])
+            with col1:
+                st.write(f"**{teacher['full_name']}** ({teacher['email']}) - {teacher['role']}")
+            with col2:
+                if st.button(f"✅ Approve {teacher['id']}", key=f"approve_{teacher['id']}"):
+                    try:
+                        # If approver id is not a UUID (e.g., developer_001), write NULL to approved_by
+                        approver = st.session_state.get('teacher_id')
+                        try:
+                            import uuid as _uuid
+                            _uuid.UUID(str(approver))
+                            dev_param = approver
+                        except Exception:
+                            dev_param = None
+
+                        update_sql = text("""
+                            UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id
+                        """)
+                        params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
+                        success = execute_sql_with_retry(update_sql, params)
+                        if success:
+                            st.success(f"Approved {teacher['full_name']}")
+                            st.rerun()
+                        else:
+                            st.error("❌ Error approving user")
+                    except Exception as e:
+                        st.error(f"❌ Error: {e}")
+            with col3:
+                if st.button(f"🗑️ Reject {teacher['id']}", key=f"reject_{teacher['id']}"):
+                    try:
+                        approver = st.session_state.get('teacher_id')
+                        try:
+                            import uuid as _uuid
+                            _uuid.UUID(str(approver))
+                            dev_param = approver
+                        except Exception:
+                            dev_param = None
+
+                        update_sql = text("""
+                            UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id
+                        """)
+                        params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
+                        success = execute_sql_with_retry(update_sql, params)
+                        if success:
+                            st.success(f"Rejected {teacher['full_name']}")
+                            st.rerun()
+                        else:
+                            st.error("❌ Error rejecting user")
+                    except Exception as e:
+                        st.error(f"❌ Error: {e}")
+    else:
+        st.info("No pending teacher approvals.")
+
+    st.markdown("## User Management")
+    users_db = load_user_database()
+    for user_id, user in users_db.items():
+        col1, col2, col3 = st.columns([3, 2, 2])
+        with col1:
+            st.write(f"**{user['full_name']}** ({user['email']}) - {user['role']} - {'Active' if user['active'] else 'Disabled'}")
+        with col2:
+            if user['active']:
+                if st.button(f"Disable {user_id}", key=f"disable_{user_id}"):
+                    result = set_user_active_status(user_id, active=False, actor_id=st.session_state.teacher_id)
+                    if result:
+                        st.success(f"User {user['full_name']} disabled.")
+                        st.rerun()
+                    else:
+                        st.error("❌ Error disabling user. See logs for details.")
+            else:
+                if st.button(f"Enable {user_id}", key=f"enable_{user_id}"):
+                    result = set_user_active_status(user_id, active=True, actor_id=st.session_state.teacher_id)
+                    if result:
+                        st.success(f"User {user['full_name']} enabled.")
+                        st.rerun()
+                    else:
+                        st.error("❌ Error enabling user. See logs for details.")
+        with col3:
+            st.write(f"Approval: {user.get('approval_status', 'N/A')}")
+# Helper: Enable or disable a user (developer bypass)
+def set_user_active_status(user_id, active=True, actor_id=None):
+    """Enable or disable a user. Developer can bypass all permission checks."""
+    try:
+        # Developer bypass
+        if actor_id == "developer_001" or (actor_id and st.session_state.get("developer_authenticated")):
+            # Developer can bypass permission checks
+            developer_bypass = True
+        else:
+            developer_bypass = False
+        # Check permissions for non-developer
+        if not developer_bypass:
+            if not check_user_permissions(actor_id, "user_management"):
+                raise Exception("Insufficient permissions to change user status.")
+
+        # Prefer SQLAlchemy session if db_manager is available
+        try:
+            if 'db_manager' in globals() and db_manager is not None:
+                session = db_manager.get_session()
+                try:
+                    session.execute(text("UPDATE users SET is_active = :is_active WHERE id = :user_id"), {"user_id": user_id, "is_active": active})
+                    session.commit()
+                finally:
+                    session.close()
+                print(f"User {user_id} status set to {active} by {actor_id} (SQLAlchemy)")
+                return True
+        except Exception as e:
+            print(f"SQLAlchemy update failed, falling back: {e}")
+
+        # Fallback to execute_sql_with_retry (Streamlit connection)
+        update_sql = text("""
+            UPDATE users SET is_active = :is_active WHERE id = :user_id
+        """)
+        params = {"user_id": user_id, "is_active": active}
+        success = execute_sql_with_retry(update_sql, params)
+        if not success:
+            raise Exception("Database update failed on fallback path.")
+        print(f"User {user_id} status set to {active} by {actor_id} (fallback)")
+        return True
+    except Exception as e:
+        print(f"Error setting user active status: {e}")
+        return False
 
 import streamlit as st
 import pandas as pd
@@ -43,6 +162,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 
+# Debug: Print st.secrets at startup to verify secrets are loaded
+print("DEBUG: st.secrets at startup:", dict(st.secrets))
 # Database imports (deployment-ready with fallbacks)
 # ============================================================================
 # STREAMLIT CLOUD PRODUCTION DATABASE CONNECTION (NEW APPROACH)
@@ -53,7 +174,8 @@ def init_sql_connection():
     """Initialize Streamlit SQLConnection with proper production settings"""
     try:
         # Use st.connection for better Streamlit Cloud compatibility
-        conn = st.connection("postgresql", type="sql", url=os.getenv("DATABASE_URL"))
+        db_url = st.secrets["DATABASE_URL"]
+        conn = st.connection("postgresql", type="sql", url=db_url)
         return conn
     except Exception as e:
         print(f"Failed to initialize SQL connection: {e}")
@@ -166,11 +288,12 @@ except ImportError:
 
 # Google Drive integration
 try:
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import Flow
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaFileUpload
-    GOOGLE_DRIVE_AVAILABLE = True
+    # Deprecated Google API imports commented out
+    # from google.oauth2.credentials import Credentials
+    # from google_auth_oauthlib.flow import Flow
+    # from googleapiclient.discovery import build
+    # from googleapiclient.http import MediaFileUpload
+    GOOGLE_DRIVE_AVAILABLE = False
 except ImportError:
     GOOGLE_DRIVE_AVAILABLE = False
 
@@ -547,6 +670,12 @@ def save_user_database(users_db):
                 if data.get("approval_date"):
                     approval_date = datetime.fromisoformat(data["approval_date"]) if isinstance(data["approval_date"], str) else data["approval_date"]
 
+                # If registering a teacher, set approval_status to 'pending' by default
+                approval_status = data.get("approval_status")
+                if not approval_status and data.get("role") in ["teacher", "class_teacher"]:
+                    approval_status = "pending"
+                else:
+                    approval_status = approval_status or "approved"
                 params = {
                     'id': user_id if user_id else str(uuid.uuid4()),
                     'full_name': data["full_name"],
@@ -556,19 +685,17 @@ def save_user_database(users_db):
                     'phone': data["phone"],
                     'is_active': data["active"],
                     'created_date': current_time,
-                    'approval_status': data.get("approval_status", "pending"),
+                    'approval_status': approval_status,
                     'approved_by': data.get("approved_by"),
                     'approval_date': approval_date,
                     'registration_notes': data.get("registration_notes")
                 }
-                execute_sql_with_retry(insert_sql, params)
 
         print(f"✅ Saved {len(users_db)} users using new SQL connection")
         return True
     except Exception as e:
         print(f"❌ Error saving users to DB: {e}")
         print("🔄 Falling back to JSON file storage...")
-        
         # Fallback: Save to JSON file if database save fails
         try:
             with open("users_database.json", 'w') as f:
@@ -583,7 +710,6 @@ def save_user_database(users_db):
                     if 'approval_date' in json_data and isinstance(json_data['approval_date'], datetime):
                         json_data['approval_date'] = json_data['approval_date'].isoformat()
                     json_users_db[user_id] = json_data
-                
                 json.dump(json_users_db, f, indent=2)
             print(f"✅ Successfully saved {len(users_db)} users to JSON fallback")
             return True
@@ -591,12 +717,26 @@ def save_user_database(users_db):
             print(f"❌ JSON fallback save also failed: {fallback_error}")
             return False
 
+# Helper: Get pending teacher approvals
+def get_pending_teacher_approvals():
+    """Return all teachers with approval_status = 'pending'"""
+    try:
+        users_df = query_with_retry("""
+            SELECT id, full_name, email, role, approval_status, approved_by, approval_date
+            FROM users
+            WHERE role IN ('teacher', 'class_teacher') AND approval_status = 'pending'
+        """, ttl=30)
+        return users_df
+    except Exception as e:
+        print(f"Error fetching pending teacher approvals: {e}")
+        return None
+
 def check_user_permissions(user_id, required_permission):
     """Check if user has required permission"""
     try:
-        # Developer bypass - allow all permissions for authenticated developers  
+        # Developer bypass - allow all permissions for authenticated developers
         if st.session_state.get("developer_authenticated") and user_id == "developer_001":
-            return True
+            return True  # Developer has all permissions
             
         users_db = load_user_database()
         if user_id not in users_db:
@@ -618,7 +758,7 @@ def check_user_feature_access(user_id, feature_key):
     try:
         # Developer bypass - allow all features for authenticated developers
         if st.session_state.get("developer_authenticated") and user_id == "developer_001":
-            return True
+            return True  # Developer has access to all features
             
         users_db = load_user_database()
         if user_id not in users_db:
@@ -3199,74 +3339,84 @@ def teacher_registration_form():
                     if len(reg_password) < 6:
                         errors.append("Password must be at least 6 characters long")
 
-                    # Check if user ID or email already exists
-                    users_db = load_user_database()
-                    if reg_user_id in users_db:
-                        errors.append("User ID already exists")
-
-                    # Check if email already exists
-                    for user_id, user_data in users_db.items():
-                        if user_data.get('email', '').lower() == reg_email.lower():
+                    # Use SQLAlchemy session to check for existing user
+                    from database.db_manager import db_manager
+                    session = db_manager.get_session()
+                    try:
+                        user_id_exists = session.execute(text("SELECT 1 FROM users WHERE id = :id"), {"id": reg_user_id}).fetchone() is not None
+                        email_exists = session.execute(text("SELECT 1 FROM users WHERE LOWER(email) = :email"), {"email": reg_email.lower()}).fetchone() is not None
+                        if user_id_exists:
+                            errors.append("User ID already exists")
+                        if email_exists:
                             errors.append("Email address already registered")
-                            break
+                    finally:
+                        session.close()
 
                     if errors:
                         for error in errors:
                             st.error(f"❌ {error}")
                     else:
-                        # Create pending teacher account
+                        # Insert new teacher using SQLAlchemy
+                        session = db_manager.get_session()
                         try:
-                            new_teacher = {
+                            insert_sql = text("""
+                                INSERT INTO users (
+                                    id, password_hash, role, full_name, email, phone, created_date, last_login, is_active,
+                                    two_factor_enabled, two_factor_secret, session_timeout, failed_attempts, locked_until,
+                                    assigned_classes, departments, custom_features, approval_status, approved_by, approval_date, registration_notes, subjects
+                                ) VALUES (
+                                    :id, :password_hash, :role, :full_name, :email, :phone, :created_date, :last_login, :is_active,
+                                    :two_factor_enabled, :two_factor_secret, :session_timeout, :failed_attempts, :locked_until,
+                                    :assigned_classes, :departments, :custom_features, :approval_status, :approved_by, :approval_date, :registration_notes, :subjects
+                                )
+                            """)
+                            params = {
+                                "id": reg_user_id,
                                 "password_hash": hash_password(reg_password),
                                 "role": "teacher",
                                 "full_name": reg_full_name,
                                 "email": reg_email,
                                 "phone": reg_phone,
-                                "created_date": datetime.now().isoformat(),
+                                "created_date": datetime.now(),
                                 "last_login": None,
-                                "active": False,  # Inactive until approved
+                                "is_active": False,
                                 "two_factor_enabled": False,
                                 "two_factor_secret": None,
                                 "session_timeout": 30,
                                 "failed_attempts": 0,
                                 "locked_until": None,
-                                "assigned_classes": reg_classes,
-                                "departments": [],
-                                "custom_features": USER_ROLES["teacher"].get('default_features', []),
-                                # New approval fields
+                                "assigned_classes": ",".join(reg_classes),
+                                "departments": "",
+                                "custom_features": ",".join(USER_ROLES["teacher"].get('default_features', [])),
                                 "approval_status": "pending",
                                 "approved_by": None,
                                 "approval_date": None,
                                 "registration_notes": reg_notes,
-                                "subjects": reg_subjects
+                                "subjects": ",".join(reg_subjects)
                             }
-
-                            users_db[reg_user_id] = new_teacher
-
-                            if save_user_database(users_db):
-                                st.success("✅ Registration submitted successfully!")
-                                st.info("""
+                            session.execute(insert_sql, params)
+                            session.commit()
+                            st.success("✅ Registration submitted successfully!")
+                            st.info("""
                                 **Next Steps:**
                                 - Your registration has been submitted for approval
                                 - A principal or administrator will review your application
                                 - You will be notified once your account is approved
                                 - Check back here or contact the school administration for updates
                                 """)
-
-                                log_teacher_activity("system", "teacher_registration", {
-                                    "registered_user": reg_user_id,
-                                    "full_name": reg_full_name,
-                                    "email": reg_email,
-                                    "timestamp": datetime.now().isoformat(),
-                                    "status": "pending_approval"
-                                })
-
-                                # Clear form
-                                st.rerun()
-                            else:
-                                st.error("❌ Registration failed. Please try again or contact administrator.")
+                            log_teacher_activity("system", "teacher_registration", {
+                                "registered_user": reg_user_id,
+                                "full_name": reg_full_name,
+                                "email": reg_email,
+                                "timestamp": datetime.now().isoformat(),
+                                "status": "pending_approval"
+                            })
+                            st.rerun()
                         except Exception as e:
+                            session.rollback()
                             st.error(f"❌ Registration error: {str(e)}")
+                        finally:
+                            session.close()
 
 def developer_login_form():
     """Developer login form with hardcoded password access"""
@@ -3289,7 +3439,8 @@ def developer_login_form():
                         st.session_state.authenticated = True
                         st.session_state.teacher_id = "developer_001"
                         st.session_state.user_role = "developer"
-                        st.session_state.user_permissions = ["super_admin", "all_access", "system_control", "activation_settings"]
+                        st.session_state.user_permissions = USER_ROLES["developer"]["permissions"]
+                        st.session_state.session_timeout = 120
                         st.session_state.last_activity = datetime.now()
                         
                         # Log successful developer login
@@ -6426,6 +6577,9 @@ def admin_panel_tab():
                                                value=email_templates.get('login_instructions', {}).get('subject', 
                                                "Parent Portal Access - {student_name}"))
 
+                    # Placeholder for missing function to avoid NameError
+                    def get_default_login_instructions_template():
+                        return "Please follow the instructions to log in."
                     email_body = st.text_area("Email Body", 
                                             value=email_templates.get('login_instructions', {}).get('body', get_default_login_instructions_template()),
                                             height=400,
@@ -7571,7 +7725,9 @@ def init_database_tables():
         return True
 
     except Exception as e:
+        import traceback
         print(f"❌ Database initialization failed: {e}")
+        traceback.print_exc()
         return False
 
 def seed_default_users():
@@ -7641,7 +7797,9 @@ def ensure_db_initialized_once():
             print("❌ Database initialization failed")
             return False
     except Exception as e:
+        import traceback
         print(f"❌ Database startup error: {e}")
+        traceback.print_exc()
         return False
 
 def main():
@@ -7652,7 +7810,9 @@ def main():
             st.error("❌ Database initialization failed. Please contact support.")
             st.stop()
     except Exception as e:
+        import traceback
         print(f"Database initialization failed: {e}")
+        traceback.print_exc()
         st.error("❌ Database connection issue. Please refresh the page.")
         st.stop()
 
@@ -7677,11 +7837,13 @@ def main():
     else:
         report_generator_page()
 
+import traceback
 # Initialize database at module level (runs when Streamlit loads the script)
 try:
     ensure_db_initialized_once()
 except Exception as e:
     print(f"Module-level database initialization failed: {e}")
+    traceback.print_exc()
 
 if __name__ == "__main__":
     main()

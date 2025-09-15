@@ -17,9 +17,9 @@ def get_engine():
     Create a restart-safe SQLAlchemy engine with connection recycling.
     Reads DATABASE_URL from Streamlit secrets or environment variables.
     """
-    db_url = st.secrets["DATABASE_URL"] if "DATABASE_URL" in st.secrets else os.environ.get("DATABASE_URL")
+    db_url = st.secrets["DATABASE_URL"]
     if not db_url:
-        raise RuntimeError("❌ DATABASE_URL not found in secrets or environment variables.")
+        raise RuntimeError("❌ DATABASE_URL not found in Streamlit secrets.")
     return create_engine(db_url.strip(), pool_pre_ping=True, pool_recycle=1800)
 
 def get_session():
@@ -56,7 +56,14 @@ def ensure_schema():
                 ADD COLUMN IF NOT EXISTS approval_date TIMESTAMP NULL,
                 ADD COLUMN IF NOT EXISTS registration_notes TEXT NULL,
                 ADD COLUMN IF NOT EXISTS failed_attempts INTEGER DEFAULT 0,
-                ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP NULL;
+                ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP NULL,
+                ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT FALSE,
+                ADD COLUMN IF NOT EXISTS two_factor_secret TEXT NULL,
+                ADD COLUMN IF NOT EXISTS session_timeout INTEGER DEFAULT 30,
+                ADD COLUMN IF NOT EXISTS assigned_classes TEXT NULL,
+                ADD COLUMN IF NOT EXISTS departments TEXT NULL,
+                ADD COLUMN IF NOT EXISTS custom_features TEXT NULL,
+                ADD COLUMN IF NOT EXISTS subjects TEXT NULL;
             """))
         except Exception as e:
             print(f"Note: Some user table columns may already exist: {e}")

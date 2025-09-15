@@ -1,0 +1,77 @@
+[
+  {
+    "timestamp": "2025-09-15T09:10:12.639142",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-15T09:10:12.638876",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "8e053aae0a1c4357",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-15T09:49:32.626019",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-15T09:49:32.625648",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "4c9d6f398b82e1ba",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-15T09:53:51.689672",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-15T09:53:51.689318",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "c931eb28de7e88f9",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-15T10:47:47.479919",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-15T10:47:47.479316",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "94186e761ac66100",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-15T10:59:52.187673",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-15T10:59:52.187615",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "10a14137ad5854f9",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  }
+]
