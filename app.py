@@ -7,96 +7,105 @@ def developer_console_ui():
             col1, col2, col3 = st.columns([3, 2, 2])
             with col1:
                 st.write(f"**{teacher['full_name']}** ({teacher['email']}) - {teacher['role']}")
+
+            # Approve button and handler
             with col2:
-                if st.button(f"✅ Approve {teacher['id']}", key=f"approve_{teacher['id']}"):
-                    try:
-                        approver = st.session_state.get('teacher_id')
+                if can_approve(st.session_state.get('teacher_id')):
+                    if st.button(f"✅ Approve {teacher['id']}", key=f"approve_{teacher['id']}"):
                         try:
-                            import uuid as _uuid
-                            _uuid.UUID(str(approver))
-                            dev_param = approver
-                        except Exception:
-                            dev_param = None
+                            approver = st.session_state.get('teacher_id')
+                            try:
+                                import uuid as _uuid
+                                _uuid.UUID(str(approver))
+                                dev_param = approver
+                            except Exception:
+                                dev_param = None
 
-                        # Prefer SQLAlchemy session for reliable writes
-                        wrote = False
-                        try:
-                            if 'db_manager' in globals() and db_manager is not None:
-                                sess = db_manager.get_session()
-                                try:
-                                    sess.execute(text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()})
-                                    sess.commit()
-                                    wrote = True
-                                finally:
-                                    sess.close()
-                        except Exception as e_sql:
-                            # Log and continue to fallback
+                            # Prefer SQLAlchemy session for reliable writes
+                            wrote = False
+                            try:
+                                if 'db_manager' in globals() and db_manager is not None:
+                                    sess = db_manager.get_session()
+                                    try:
+                                        sess.execute(text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()})
+                                        sess.commit()
+                                        wrote = True
+                                    finally:
+                                        sess.close()
+                            except Exception as e_sql:
+                                with open('dev_actions.log', 'a') as fw:
+                                    import traceback
+                                    fw.write(f"Approve SQLAlchemy error for {teacher['id']}: {e_sql}\n")
+                                    fw.write(traceback.format_exc() + "\n")
+
+                            if not wrote:
+                                update_sql = text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id")
+                                params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
+                                success = execute_sql_with_retry(update_sql, params)
+                                wrote = bool(success)
+
+                            if wrote:
+                                st.success(f"Approved {teacher['full_name']}")
+                                st.rerun()
+                            else:
+                                st.error("❌ Error approving user (DB write failed)")
+                        except Exception as e:
+                            import traceback
                             with open('dev_actions.log', 'a') as fw:
-                                import traceback
-                                fw.write(f"Approve SQLAlchemy error for {teacher['id']}: {e_sql}\n")
+                                fw.write(f"Unhandled approve error for {teacher['id']}: {e}\n")
                                 fw.write(traceback.format_exc() + "\n")
+                            st.error(f"❌ Error approving user: {e}")
+                else:
+                    st.warning("⚠️ You do not have permission to approve users. Only the Principal or Developer can approve.")
 
-                        if not wrote:
-                            update_sql = text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id")
-                            params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
-                            success = execute_sql_with_retry(update_sql, params)
-                            wrote = bool(success)
-
-                        if wrote:
-                            st.success(f"Approved {teacher['full_name']}")
-                            st.rerun()
-                        else:
-                            st.error("❌ Error approving user (DB write failed)")
-                    except Exception as e:
-                        import traceback
-                        with open('dev_actions.log', 'a') as fw:
-                            fw.write(f"Unhandled approve error for {teacher['id']}: {e}\n")
-                            fw.write(traceback.format_exc() + "\n")
-                        st.error(f"❌ Error approving user: {e}")
+            # Reject button and handler
             with col3:
-                if st.button(f"🗑️ Reject {teacher['id']}", key=f"reject_{teacher['id']}"):
-                    try:
-                        approver = st.session_state.get('teacher_id')
+                if can_approve(st.session_state.get('teacher_id')):
+                    if st.button(f"🗑️ Reject {teacher['id']}", key=f"reject_{teacher['id']}"):
                         try:
-                            import uuid as _uuid
-                            _uuid.UUID(str(approver))
-                            dev_param = approver
-                        except Exception:
-                            dev_param = None
+                            approver = st.session_state.get('teacher_id')
+                            try:
+                                import uuid as _uuid
+                                _uuid.UUID(str(approver))
+                                dev_param = approver
+                            except Exception:
+                                dev_param = None
 
-                        wrote = False
-                        try:
-                            if 'db_manager' in globals() and db_manager is not None:
-                                sess = db_manager.get_session()
-                                try:
-                                    sess.execute(text("UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()})
-                                    sess.commit()
-                                    wrote = True
-                                finally:
-                                    sess.close()
-                        except Exception as e_sql:
+                            wrote = False
+                            try:
+                                if 'db_manager' in globals() and db_manager is not None:
+                                    sess = db_manager.get_session()
+                                    try:
+                                        sess.execute(text("UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()})
+                                        sess.commit()
+                                        wrote = True
+                                    finally:
+                                        sess.close()
+                            except Exception as e_sql:
+                                with open('dev_actions.log', 'a') as fw:
+                                    import traceback
+                                    fw.write(f"Reject SQLAlchemy error for {teacher['id']}: {e_sql}\n")
+                                    fw.write(traceback.format_exc() + "\n")
+
+                            if not wrote:
+                                update_sql = text("UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id")
+                                params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
+                                success = execute_sql_with_retry(update_sql, params)
+                                wrote = bool(success)
+
+                            if wrote:
+                                st.success(f"Rejected {teacher['full_name']}")
+                                st.rerun()
+                            else:
+                                st.error("❌ Error rejecting user (DB write failed)")
+                        except Exception as e:
+                            import traceback
                             with open('dev_actions.log', 'a') as fw:
-                                import traceback
-                                fw.write(f"Reject SQLAlchemy error for {teacher['id']}: {e_sql}\n")
+                                fw.write(f"Unhandled reject error for {teacher['id']}: {e}\n")
                                 fw.write(traceback.format_exc() + "\n")
-
-                        if not wrote:
-                            update_sql = text("UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id")
-                            params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
-                            success = execute_sql_with_retry(update_sql, params)
-                            wrote = bool(success)
-
-                        if wrote:
-                            st.success(f"Rejected {teacher['full_name']}")
-                            st.rerun()
-                        else:
-                            st.error("❌ Error rejecting user (DB write failed)")
-                    except Exception as e:
-                        import traceback
-                        with open('dev_actions.log', 'a') as fw:
-                            fw.write(f"Unhandled reject error for {teacher['id']}: {e}\n")
-                            fw.write(traceback.format_exc() + "\n")
-                        st.error(f"❌ Error rejecting user: {e}")
+                            st.error(f"❌ Error rejecting user: {e}")
+                else:
+                    st.info("⚠️ You do not have permission to reject users. Only the Principal or Developer can reject.")
     else:
         st.info("No pending teacher approvals.")
 
@@ -109,7 +118,7 @@ def developer_console_ui():
         with col2:
             if user['active']:
                 if st.button(f"Disable {user_id}", key=f"disable_{user_id}"):
-                    result = set_user_active_status(user_id, active=False, actor_id=st.session_state.teacher_id)
+                    result = set_user_active_status(user_id, active=False, actor_id=st.session_state.get('teacher_id'))
                     if result:
                         st.success(f"User {user['full_name']} disabled.")
                         st.rerun()
@@ -117,7 +126,7 @@ def developer_console_ui():
                         st.error("❌ Error disabling user. See logs for details.")
             else:
                 if st.button(f"Enable {user_id}", key=f"enable_{user_id}"):
-                    result = set_user_active_status(user_id, active=True, actor_id=st.session_state.teacher_id)
+                    result = set_user_active_status(user_id, active=True, actor_id=st.session_state.get('teacher_id'))
                     if result:
                         st.success(f"User {user['full_name']} enabled.")
                         st.rerun()
@@ -831,6 +840,41 @@ def check_user_feature_access(user_id, feature_key):
 
         return feature_key in default_features
     except Exception as e:
+        return False
+
+
+def can_approve(actor_id=None):
+    """Return True if the given actor can approve/reject registrations.
+
+    Rules:
+    - Authenticated developer (session flag) with id 'developer_001' can approve.
+    - Users with the 'user_management' permission can approve.
+    - Principals can approve by role.
+    """
+    try:
+        if actor_id is None:
+            actor_id = st.session_state.get('teacher_id')
+
+        # Developer bypass
+        if st.session_state.get('developer_authenticated') and actor_id == 'developer_001':
+            return True
+
+        users_db = load_user_database()
+        if not actor_id or actor_id not in users_db:
+            return False
+
+        user = users_db.get(actor_id, {})
+        role = user.get('role', '')
+
+        if role == 'principal':
+            return True
+
+        # Check explicit permission
+        if check_user_permissions(actor_id, 'user_management'):
+            return True
+
+        return False
+    except Exception:
         return False
 
 def is_user_locked(user_id):
@@ -1939,6 +1983,30 @@ def _is_valid_uuid(val):
         import uuid as _uuid
         _uuid.UUID(str(val))
         return True
+    except Exception:
+        return False
+
+def can_approve(actor_id=None):
+    """Return True if the given actor can approve or reject user applications.
+
+    Rules:
+    - Authenticated developer (`st.session_state.developer_authenticated` and actor_id == 'developer_001') can approve.
+    - Users with permission `system_config` (principal/admin) can approve.
+    """
+    try:
+        # Developer bypass
+        if st.session_state.get('developer_authenticated') and (actor_id == 'developer_001' or st.session_state.get('teacher_id') == 'developer_001'):
+            return True
+
+        # If actor_id not provided, use session teacher_id
+        if not actor_id:
+            actor_id = st.session_state.get('teacher_id')
+
+        if not actor_id:
+            return False
+
+        # Check permissions via existing helper
+        return check_user_permissions(actor_id, 'system_config')
     except Exception:
         return False
 
@@ -4339,27 +4407,12 @@ def report_generator_tab():
             st.markdown("**Character Assessment (A-E or 1-5):**")
             char_col1, char_col2, char_col3 = st.columns(3)
             with char_col1:
-                class_attendance_rating = st.text_input("Class Attendance", key="char_attendance", placeholder="A")
-                punctuality_rating = st.text_input("Punctuality", key="char_punctuality", placeholder="B")
+                conduct_rating = st.text_input("Conduct", key="skill_conduct", placeholder="A")
+                punctuality_rating = st.text_input("Punctuality", key="skill_punctuality", placeholder="A")
             with char_col2:
-                neatness_rating = st.text_input("Neatness", key="char_neatness", placeholder="A")
-                quickness_rating = st.text_input("Quickness", key="char_quickness", placeholder="B")
-            with char_col3:
-                self_control_rating = st.text_input("Self Control", key="char_self_control", placeholder="A")
-                relationship_rating = st.text_input("Relationship", key="char_relationship", placeholder="A")
-
-            # Practical Skills Assessment
-            st.markdown("**Practical Skills Assessment (A-E or 1-5):**")
-            skill_col1, skill_col2, skill_col3 = st.columns(3)
-            with skill_col1:
-                handwriting_rating = st.text_input("Handwriting", key="skill_handwriting", placeholder="A")
-                drama_rating = st.text_input("Drama", key="skill_drama", placeholder="B")
-                musical_rating = st.text_input("Musical Skills", key="skill_musical", placeholder="C")
-            with skill_col2:
-                crafts_rating = st.text_input("Crafts", key="skill_crafts", placeholder="B")
                 clubs_rating = st.text_input("Clubs/Societies", key="skill_clubs", placeholder="A")
                 hobbies_rating = st.text_input("Hobbies", key="skill_hobbies", placeholder="A")
-            with skill_col3:
+            with char_col3:
                 sports_rating = st.text_input("Sports", key="skill_sports", placeholder="B")
 
             # Teacher Comments
@@ -4807,10 +4860,9 @@ def student_database_tab():
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    new_student_name = st.text_input("Student Name*", placeholder="John Doe")
-                    new_student_class = st.text_input("Class*", placeholder="SS1A")
-                    new_parent_name = st.text_input("Parent/Guardian Name", placeholder="Mr. John Doe Sr.")
-                    new_gender = st.selectbox("Gender", ["Male", "Female"], key="new_gender")
+                    new_student_name = st.text_input("Student Name", placeholder="John Doe")
+                    new_student_class = st.text_input("Class", placeholder="Grade 1")
+                    new_parent_name = st.text_input("Parent/Guardian Name", placeholder="Jane Doe")
                     new_admission_no = st.text_input("Admission Number", placeholder="ASS/25/001")
 
                 with col2:
@@ -4822,8 +4874,8 @@ def student_database_tab():
 
                 if st.form_submit_button("💾 Save Student"):
                     if new_student_name and new_student_class and new_parent_email:
-                        if save_student_data(new_student_name, new_student_class, new_parent_name, 
-                                           new_parent_email, new_parent_phone, student_photo, 
+                        if save_student_data(new_student_name, new_student_class, new_parent_name,
+                                           new_parent_email, new_parent_phone, student_photo,
                                            new_gender, new_admission_no, str(new_class_size), new_attendance):
                             st.success(f"✅ Student {new_student_name} added successfully!")
                             st.rerun()
@@ -5379,30 +5431,32 @@ def admin_panel_tab():
                                 st.write(f"📝 Notes: {notes}")
 
                         with col2:
-                            if st.button("✅ Approve", key=f"approve_{user_id}", type="primary"):
-                                # Approve the teacher
-                                users_db[user_id]['approval_status'] = 'approved'
-                                users_db[user_id]['approved_by'] = st.session_state.teacher_id
-                                users_db[user_id]['approval_date'] = datetime.now().isoformat()
-                                users_db[user_id]['active'] = True  # Activate account
+                            if can_approve(st.session_state.get('teacher_id')):
+                                if st.button("✅ Approve", key=f"approve_{user_id}", type="primary"):
+                                    # Approve the teacher
+                                    users_db[user_id]['approval_status'] = 'approved'
+                                    users_db[user_id]['approved_by'] = st.session_state.teacher_id
+                                    users_db[user_id]['approval_date'] = datetime.now().isoformat()
+                                    users_db[user_id]['active'] = True  # Activate account
 
-                                if save_user_database(users_db):
-                                    st.success(f"✅ Teacher {teacher.get('full_name')} approved!")
-                                    log_teacher_activity(st.session_state.teacher_id, "teacher_approved", {
-                                        "approved_user": user_id,
-                                        "teacher_name": teacher.get('full_name'),
-                                        "approved_by": st.session_state.teacher_id,
-                                        "timestamp": datetime.now().isoformat()
-                                    })
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Error approving teacher")
+                                    if save_user_database(users_db):
+                                        st.success(f"✅ Teacher {teacher.get('full_name')} approved!")
+                                        log_teacher_activity(st.session_state.teacher_id, "teacher_approved", {
+                                            "approved_user": user_id,
+                                            "teacher_name": teacher.get('full_name'),
+                                            "approved_by": st.session_state.teacher_id,
+                                            "timestamp": datetime.now().isoformat()
+                                        })
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Error approving teacher")
 
                         with col3:
-                            if st.button("❌ Reject", key=f"reject_{user_id}", type="secondary"):
-                                # Show rejection reason dialog
-                                st.session_state[f'show_reject_reason_{user_id}'] = True
-                                st.rerun()
+                            if can_approve(st.session_state.get('teacher_id')):
+                                if st.button("❌ Reject", key=f"reject_{user_id}", type="secondary"):
+                                    # Show rejection reason dialog
+                                    st.session_state[f'show_reject_reason_{user_id}'] = True
+                                    st.rerun()
 
                         # Handle rejection reason dialog
                         if st.session_state.get(f'show_reject_reason_{user_id}', False):
