@@ -306,7 +306,7 @@ from datetime import datetime, timedelta
 import uuid
 
 def load_user_database():
-    """Load user database using Streamlit SQL Connection - PRODUCTION READY for Streamlit Cloud"""
+    """Load user database using Streamlit SQL Connection with JSON fallback - PRODUCTION READY for Streamlit Cloud"""
     try:
         print("🔄 Loading users from database...")
 
@@ -354,7 +354,20 @@ def load_user_database():
 
     except Exception as e:
         print(f"❌ Failed to load users from database: {e}")
-        print("⚠️ CRITICAL: Cannot access user database - authentication will not work")
+        print("🔄 Falling back to JSON user database...")
+        
+        # Fallback to JSON database
+        try:
+            fallback_users = load_user_database_fallback()
+            if fallback_users:
+                print(f"✅ Successfully loaded {len(fallback_users)} users from JSON fallback")
+                return fallback_users
+            else:
+                print("⚠️ No fallback users available")
+                return {}
+        except Exception as fallback_error:
+            print(f"❌ JSON fallback load also failed: {fallback_error}")
+            return {}
 
         # Show error in UI if in Streamlit context
         try:
@@ -446,14 +459,34 @@ def load_user_database_fallback():
 
 def save_user_database(users_db):
     """
-    Save user database using new Streamlit SQL connection.
+    Save user database using new Streamlit SQL connection with JSON fallback.
     Expects users_db to be a dict keyed by user_id with user details.
     """
     try:
         conn = get_healthy_sql_connection()
         if not conn:
-            print("❌ No database connection for save_user_database")
-            return False
+            print("❌ No database connection for save_user_database, using JSON fallback")
+            # Direct fallback to JSON when no connection
+            try:
+                with open("users_database.json", 'w') as f:
+                    # Convert datetime objects to strings for JSON serialization
+                    json_users_db = {}
+                    for user_id, data in users_db.items():
+                        json_data = data.copy()
+                        if 'created_date' in json_data and isinstance(json_data['created_date'], datetime):
+                            json_data['created_date'] = json_data['created_date'].isoformat()
+                        if 'last_login' in json_data and isinstance(json_data['last_login'], datetime):
+                            json_data['last_login'] = json_data['last_login'].isoformat()
+                        if 'approval_date' in json_data and isinstance(json_data['approval_date'], datetime):
+                            json_data['approval_date'] = json_data['approval_date'].isoformat()
+                        json_users_db[user_id] = json_data
+                    
+                    json.dump(json_users_db, f, indent=2)
+                print(f"✅ Successfully saved {len(users_db)} users to JSON fallback")
+                return True
+            except Exception as fallback_error:
+                print(f"❌ JSON fallback save failed: {fallback_error}")
+                return False
 
         for user_id, data in users_db.items():
             # Check if user exists
@@ -532,7 +565,29 @@ def save_user_database(users_db):
         return True
     except Exception as e:
         print(f"❌ Error saving users to DB: {e}")
-        return False
+        print("🔄 Falling back to JSON file storage...")
+        
+        # Fallback: Save to JSON file if database save fails
+        try:
+            with open("users_database.json", 'w') as f:
+                # Convert datetime objects to strings for JSON serialization
+                json_users_db = {}
+                for user_id, data in users_db.items():
+                    json_data = data.copy()
+                    if 'created_date' in json_data and isinstance(json_data['created_date'], datetime):
+                        json_data['created_date'] = json_data['created_date'].isoformat()
+                    if 'last_login' in json_data and isinstance(json_data['last_login'], datetime):
+                        json_data['last_login'] = json_data['last_login'].isoformat()
+                    if 'approval_date' in json_data and isinstance(json_data['approval_date'], datetime):
+                        json_data['approval_date'] = json_data['approval_date'].isoformat()
+                    json_users_db[user_id] = json_data
+                
+                json.dump(json_users_db, f, indent=2)
+            print(f"✅ Successfully saved {len(users_db)} users to JSON fallback")
+            return True
+        except Exception as fallback_error:
+            print(f"❌ JSON fallback save also failed: {fallback_error}")
+            return False
 
 def check_user_permissions(user_id, required_permission):
     """Check if user has required permission"""
@@ -2148,9 +2203,23 @@ def is_activation_key_deactivated(activation_key):
 
 
 def get_current_activation_key():
-    """Get the currently active activation key from Supabase"""
+    """Get the currently active activation key from database with fallback handling"""
     try:
+        # Check if db_manager is available and connected
+        if db_manager is None:
+            print("⚠️ Database manager not available for activation key")
+            return None
+            
+        # Check if we have a healthy connection
+        if not get_healthy_sql_connection():
+            print("⚠️ No database connection for activation key")
+            return None
+            
         session = db_manager.get_session()
+        if session is None:
+            print("⚠️ Could not get database session for activation key")
+            return None
+            
         key = session.query(ActivationKey).filter_by(is_active=True).first()
         session.close()
         if key:
