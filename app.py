@@ -371,13 +371,13 @@ def load_user_database_fallback():
             with open("users_database.json", 'r') as f:
                 return json.load(f)
         else:
-            # Create default users if no database exists
+            # Create default users if no database exists (teacher_bamstep account DISABLED as per requirements)
             return {
-                "teacher_bamstep": {
-                    "password_hash": hash_password("admin789"),
-                    "role": "principal", 
-                    "full_name": "Principal Bamstep",
-                    "email": "principal@akinssunrise.edu.ng",
+                "developer_001": {
+                    "password_hash": hash_password("Stephen@22"),
+                    "role": "developer", 
+                    "full_name": "System Developer",
+                    "email": "developer@akinssunrise.edu.ng",
                     "phone": "+234-XXX-XXX-XXXX",
                     "created_date": datetime.now().isoformat(),
                     "last_login": None,
@@ -393,7 +393,7 @@ def load_user_database_fallback():
                     "approval_status": "approved",
                     "approved_by": None,
                     "approval_date": None,
-                    "registration_notes": None
+                    "registration_notes": "System Developer Account"
                 },
                 "teacher_bola": {
                     "password_hash": hash_password("secret123"),
@@ -3375,7 +3375,7 @@ def show_activation_required_page():
                     "school_name": school_name,
                     "subscription_type": subscription_type,
                     "generated_date": datetime.now().isoformat(),
-                    "generated_by": "teacher_bamstep",
+                    "generated_by": "developer_001",
                     "amount": config.get(f'{subscription_type}_amount', 20000),
                     "status": "generated"
                 }
@@ -3459,7 +3459,7 @@ def show_activation_required_page():
                                         actual_index = len(records) - 15 + i
                                         records[actual_index]['status'] = 'deactivated'
                                         records[actual_index]['deactivated_date'] = datetime.now().isoformat()
-                                        records[actual_index]['deactivated_by'] = 'teacher_bamstep'
+                                        records[actual_index]['deactivated_by'] = 'developer_001'
 
                                         # Save updated records with proper file handling
                                         with open("activation_records.json", 'w') as f:
@@ -3510,7 +3510,7 @@ def show_activation_required_page():
                                     if record.get('status', 'generated') != 'deactivated':
                                         record['status'] = 'deactivated'
                                         record['deactivated_date'] = datetime.now().isoformat()
-                                        record['deactivated_by'] = 'teacher_bamstep'
+                                        record['deactivated_by'] = 'developer_001'
                                         deactivated_count += 1
 
                                 # Save updated records
@@ -3562,7 +3562,7 @@ def show_activation_required_page():
                                         if record.get('activation_key') == current_key:
                                             record['status'] = 'deactivated'
                                             record['deactivated_date'] = datetime.now().isoformat()
-                                            record['deactivated_by'] = 'teacher_bamstep'
+                                            record['deactivated_by'] = 'developer_001'
                                             break
 
                                     # Save updated records
@@ -3744,6 +3744,11 @@ def staff_login_form():
                     found_user_id, user = find_user_by_id_or_email(user_input, users_db)
 
                     if found_user_id and user:
+                        # Block teacher_bamstep account entirely (as per requirements)
+                        if found_user_id == "teacher_bamstep":
+                            st.error("❌ This account has been disabled. Please contact the developer.")
+                            return
+                            
                         # Check if user is active
                         if not user.get('active', True):
                             st.error("❌ Account is disabled. Contact administrator.")
@@ -4376,7 +4381,7 @@ def report_generator_tab():
 def student_database_tab():
     st.subheader("👥 Student Database")
 
-    admin_users = ["teacher_bamstep"]
+    admin_users = ["developer_001"]
     is_admin = st.session_state.teacher_id in admin_users
 
     if not is_admin:
@@ -6137,7 +6142,7 @@ def admin_panel_tab():
 
             with col1:
                 support_contact = st.text_input("Support Contact Name", 
-                                               value=support_config.get('contact_name', 'teacher_bamstep'),
+                                               value=support_config.get('contact_name', 'Developer Support'),
                                                help="Name of the person handling support requests")
                 support_email = st.text_input("Support Email", 
                                             value=support_config.get('email', 'bamstep@akinssunrise.edu.ng'),
@@ -6197,7 +6202,7 @@ def admin_panel_tab():
 
         # Show preview of how it will look
         current_config = support_config if support_config else {
-            'contact_name': 'teacher_bamstep',
+            'contact_name': 'Developer Support',
             'email': 'bamstep@akinssunrise.edu.ng',
             'phone': '+234 800 123 4567',
             'hours': 'Monday - Friday, 9:00 AM - 5:00 PM',
@@ -6208,7 +6213,7 @@ def admin_panel_tab():
         st.info(f"""
 **Need help with activation?**
 
-📞 **Contact:** {current_config.get('contact_name', 'teacher_bamstep')}
+📞 **Contact:** {current_config.get('contact_name', 'Developer Support')}
 📧 **Email:** {current_config.get('email', 'bamstep@akinssunrise.edu.ng')}
 📱 **Phone:** {current_config.get('phone', '+234 800 123 4567')}
 🕐 **Hours:** {current_config.get('hours', 'Monday - Friday, 9:00 AM - 5:00 PM')}
@@ -6570,8 +6575,8 @@ def admin_panel_tab():
         with config_tab5:
             st.markdown("### 💳 System Activation & Payment Configuration")
 
-            # Only teacher_bamstep can access this section
-            if st.session_state.teacher_id == "teacher_bamstep":
+            # Only developer can access this section
+            if st.session_state.get('developer_authenticated') and st.session_state.teacher_id == "developer_001":
                 activation_config = load_activation_config()
 
                 st.markdown("#### 💰 Payment Plan Configuration")
@@ -6757,7 +6762,7 @@ def admin_panel_tab():
                         else:
                             st.error("❌ Error activating system")
             else:
-                st.warning("⚠️ Access restricted to teacher_bamstep only.")
+                st.warning("⚠️ Access restricted to developer only.")
                 st.info("Only the system developer can configure activation and payment settings.")
 
         with config_tab6:
