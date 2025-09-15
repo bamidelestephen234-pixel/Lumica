@@ -10,7 +10,6 @@ def developer_console_ui():
             with col2:
                 if st.button(f"✅ Approve {teacher['id']}", key=f"approve_{teacher['id']}"):
                     try:
-                        # If approver id is not a UUID (e.g., developer_001), write NULL to approved_by
                         approver = st.session_state.get('teacher_id')
                         try:
                             import uuid as _uuid
@@ -19,18 +18,41 @@ def developer_console_ui():
                         except Exception:
                             dev_param = None
 
-                        update_sql = text("""
-                            UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id
-                        """)
-                        params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
-                        success = execute_sql_with_retry(update_sql, params)
-                        if success:
+                        # Prefer SQLAlchemy session for reliable writes
+                        wrote = False
+                        try:
+                            if 'db_manager' in globals() and db_manager is not None:
+                                sess = db_manager.get_session()
+                                try:
+                                    sess.execute(text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()})
+                                    sess.commit()
+                                    wrote = True
+                                finally:
+                                    sess.close()
+                        except Exception as e_sql:
+                            # Log and continue to fallback
+                            with open('dev_actions.log', 'a') as fw:
+                                import traceback
+                                fw.write(f"Approve SQLAlchemy error for {teacher['id']}: {e_sql}\n")
+                                fw.write(traceback.format_exc() + "\n")
+
+                        if not wrote:
+                            update_sql = text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id")
+                            params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
+                            success = execute_sql_with_retry(update_sql, params)
+                            wrote = bool(success)
+
+                        if wrote:
                             st.success(f"Approved {teacher['full_name']}")
                             st.rerun()
                         else:
-                            st.error("❌ Error approving user")
+                            st.error("❌ Error approving user (DB write failed)")
                     except Exception as e:
-                        st.error(f"❌ Error: {e}")
+                        import traceback
+                        with open('dev_actions.log', 'a') as fw:
+                            fw.write(f"Unhandled approve error for {teacher['id']}: {e}\n")
+                            fw.write(traceback.format_exc() + "\n")
+                        st.error(f"❌ Error approving user: {e}")
             with col3:
                 if st.button(f"🗑️ Reject {teacher['id']}", key=f"reject_{teacher['id']}"):
                     try:
@@ -42,18 +64,39 @@ def developer_console_ui():
                         except Exception:
                             dev_param = None
 
-                        update_sql = text("""
-                            UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id
-                        """)
-                        params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
-                        success = execute_sql_with_retry(update_sql, params)
-                        if success:
+                        wrote = False
+                        try:
+                            if 'db_manager' in globals() and db_manager is not None:
+                                sess = db_manager.get_session()
+                                try:
+                                    sess.execute(text("UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()})
+                                    sess.commit()
+                                    wrote = True
+                                finally:
+                                    sess.close()
+                        except Exception as e_sql:
+                            with open('dev_actions.log', 'a') as fw:
+                                import traceback
+                                fw.write(f"Reject SQLAlchemy error for {teacher['id']}: {e_sql}\n")
+                                fw.write(traceback.format_exc() + "\n")
+
+                        if not wrote:
+                            update_sql = text("UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id")
+                            params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
+                            success = execute_sql_with_retry(update_sql, params)
+                            wrote = bool(success)
+
+                        if wrote:
                             st.success(f"Rejected {teacher['full_name']}")
                             st.rerun()
                         else:
-                            st.error("❌ Error rejecting user")
+                            st.error("❌ Error rejecting user (DB write failed)")
                     except Exception as e:
-                        st.error(f"❌ Error: {e}")
+                        import traceback
+                        with open('dev_actions.log', 'a') as fw:
+                            fw.write(f"Unhandled reject error for {teacher['id']}: {e}\n")
+                            fw.write(traceback.format_exc() + "\n")
+                        st.error(f"❌ Error rejecting user: {e}")
     else:
         st.info("No pending teacher approvals.")
 

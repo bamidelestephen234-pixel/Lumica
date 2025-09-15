@@ -6,7 +6,8 @@ import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
-# Import your Base and password hashing from existing modules
+# Import your Base and password hashing fr
+# om existing modules
 from database.models import Base
 from utils.security import hash_password  # adjust import path if needed
 
