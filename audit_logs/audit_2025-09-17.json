@@ -1,0 +1,92 @@
+[
+  {
+    "timestamp": "2025-09-17T15:05:38.069403",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-17T15:05:38.069355",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "b16bf545f9717d12",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-17T16:45:40.345490",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-17T16:45:40.345439",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "c4941e1432cbdafc",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-17T16:51:11.419431",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-17T16:51:11.419269",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "5ffc9a243acb4414",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-17T18:27:43.503352",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-17T18:27:43.503302",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "ffc94808b3c1d10a",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-17T18:40:19.533392",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-17T18:40:19.532523",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "8005b5240d21649b",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-17T18:43:03.751146",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-17T18:43:03.751088",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "ab7696b622dcf245",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  }
+]

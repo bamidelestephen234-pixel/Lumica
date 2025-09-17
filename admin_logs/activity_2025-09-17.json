@@ -1,0 +1,60 @@
+[
+  {
+    "timestamp": "2025-09-17T16:51:23.668413",
+    "teacher_id": "developer_001",
+    "activity": "logout",
+    "details": {
+      "logout_time": "2025-09-17T16:51:23.667357"
+    }
+  },
+  {
+    "timestamp": "2025-09-17T18:41:06.559468",
+    "teacher_id": "developer_001",
+    "activity": "logout",
+    "details": {
+      "logout_time": "2025-09-17T18:41:06.559445"
+    }
+  },
+  {
+    "timestamp": "2025-09-17T18:42:00.317895",
+    "teacher_id": "system",
+    "activity": "teacher_registration",
+    "details": {
+      "registered_user": "teacher_bola",
+      "full_name": "Akinmusere Emma",
+      "email": "bamidelestephen441@gmail.com",
+      "timestamp": "2025-09-17T18:42:00.317862",
+      "status": "pending_approval"
+    }
+  },
+  {
+    "timestamp": "2025-09-17T18:42:47.907319",
+    "teacher_id": "system",
+    "activity": "teacher_registration",
+    "details": {
+      "registered_user": "teacher_bo",
+      "full_name": " Emma",
+      "email": "bamidelestephen22@gmail.com",
+      "timestamp": "2025-09-17T18:42:47.907188",
+      "status": "pending_approval"
+    }
+  },
+  {
+    "timestamp": "2025-09-17T18:44:17.843501",
+    "teacher_id": "developer_001",
+    "activity": "logout",
+    "details": {
+      "logout_time": "2025-09-17T18:44:17.843480"
+    }
+  },
+  {
+    "timestamp": "2025-09-17T18:44:46.736237",
+    "teacher_id": "teacher_bo",
+    "activity": "login",
+    "details": {
+      "login_time": "2025-09-17T18:44:46.736213",
+      "ip_address": "replit_session",
+      "user_role": "teacher"
+    }
+  }
+]

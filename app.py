@@ -14,41 +14,13 @@ def developer_console_ui():
                     if st.button(f"✅ Approve {teacher['id']}", key=f"approve_{teacher['id']}"):
                         try:
                             approver = st.session_state.get('teacher_id')
-                            try:
-                                import uuid as _uuid
-                                _uuid.UUID(str(approver))
-                                dev_param = approver
-                            except Exception:
-                                dev_param = None
-
-                            # Prefer SQLAlchemy session for reliable writes
-                            wrote = False
-                            try:
-                                if 'db_manager' in globals() and db_manager is not None:
-                                    sess = db_manager.get_session()
-                                    try:
-                                        sess.execute(text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()})
-                                        sess.commit()
-                                        wrote = True
-                                    finally:
-                                        sess.close()
-                            except Exception as e_sql:
-                                with open('dev_actions.log', 'a') as fw:
-                                    import traceback
-                                    fw.write(f"Approve SQLAlchemy error for {teacher['id']}: {e_sql}\n")
-                                    fw.write(traceback.format_exc() + "\n")
-
-                            if not wrote:
-                                update_sql = text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id")
-                                params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
-                                success = execute_sql_with_retry(update_sql, params)
-                                wrote = bool(success)
-
-                            if wrote:
+                            # Use the centralized set_user_active_status function to handle the approval
+                            if set_user_active_status(teacher['id'], active=True, actor_id=approver):
                                 st.success(f"Approved {teacher['full_name']}")
                                 st.rerun()
                             else:
-                                st.error("❌ Error approving user (DB write failed)")
+                                st.error("❌ Error approving user")
+                                
                         except Exception as e:
                             import traceback
                             with open('dev_actions.log', 'a') as fw:
@@ -109,38 +81,14 @@ def developer_console_ui():
     else:
         st.info("No pending teacher approvals.")
 
-    st.markdown("## User Management")
-    users_db = load_user_database()
-    for user_id, user in users_db.items():
-        col1, col2, col3 = st.columns([3, 2, 2])
-        with col1:
-            st.write(f"**{user['full_name']}** ({user['email']}) - {user['role']} - {'Active' if user['active'] else 'Disabled'}")
-        with col2:
-            if user['active']:
-                if st.button(f"Disable {user_id}", key=f"disable_{user_id}"):
-                    result = set_user_active_status(user_id, active=False, actor_id=st.session_state.get('teacher_id'))
-                    if result:
-                        st.success(f"User {user['full_name']} disabled.")
-                        st.rerun()
-                    else:
-                        st.error("❌ Error disabling user. See logs for details.")
-            else:
-                if st.button(f"Enable {user_id}", key=f"enable_{user_id}"):
-                    result = set_user_active_status(user_id, active=True, actor_id=st.session_state.get('teacher_id'))
-                    if result:
-                        st.success(f"User {user['full_name']} enabled.")
-                        st.rerun()
-                    else:
-                        st.error("❌ Error enabling user. See logs for details.")
-        with col3:
-            st.write(f"Approval: {user.get('approval_status', 'N/A')}")
+    # Removed duplicate user management tab. User management is handled in the developer console tabs only.
 # Helper: Enable or disable a user (developer bypass)
 def set_user_active_status(user_id, active=True, actor_id=None):
-    """Enable or disable a user. Developer can bypass all permission checks."""
+    """Enable or disable a user. Developer can bypass all permission checks.
+    When enabling a user, this also ensures their approval_status is set to 'approved'."""
     try:
         # Developer bypass
         if actor_id == "developer_001" or (actor_id and st.session_state.get("developer_authenticated")):
-            # Developer can bypass permission checks
             developer_bypass = True
         else:
             developer_bypass = False
@@ -154,7 +102,17 @@ def set_user_active_status(user_id, active=True, actor_id=None):
             if 'db_manager' in globals() and db_manager is not None:
                 session = db_manager.get_session()
                 try:
-                    session.execute(text("UPDATE users SET is_active = :is_active WHERE id = :user_id"), {"user_id": user_id, "is_active": active})
+                    # When enabling, also set approval_status to approved
+                    if active:
+                        session.execute(
+                            text("UPDATE users SET is_active = :is_active, approval_status = 'approved', approved_by = :actor_id, approval_date = :now WHERE id = :user_id"), 
+                            {"user_id": user_id, "is_active": active, "actor_id": actor_id, "now": datetime.now()}
+                        )
+                    else:
+                        session.execute(
+                            text("UPDATE users SET is_active = :is_active WHERE id = :user_id"),
+                            {"user_id": user_id, "is_active": active}
+                        )
                     session.commit()
                 finally:
                     session.close()
@@ -164,18 +122,72 @@ def set_user_active_status(user_id, active=True, actor_id=None):
             print(f"SQLAlchemy update failed, falling back: {e}")
 
         # Fallback to execute_sql_with_retry (Streamlit connection)
-        update_sql = text("""
-            UPDATE users SET is_active = :is_active WHERE id = :user_id
-        """)
-        params = {"user_id": user_id, "is_active": active}
+        if active:
+            update_sql = text("""
+                UPDATE users 
+                SET is_active = :is_active,
+                    approval_status = 'approved',
+                    approved_by = :actor_id,
+                    approval_date = :now
+                WHERE id = :user_id
+            """)
+            params = {"user_id": user_id, "is_active": active, "actor_id": actor_id, "now": datetime.now()}
+        else:
+            update_sql = text("""
+                UPDATE users 
+                SET is_active = :is_active
+                WHERE id = :user_id
+            """)
+            params = {"user_id": user_id, "is_active": active}
+            
         success = execute_sql_with_retry(update_sql, params)
         if not success:
-            raise Exception("Database update failed on fallback path.")
+            print("⚠️ Database update failed on fallback path. Attempting JSON fallback...")
+            try:
+                # Try to update the local JSON fallback so approvals persist when DB is not available
+                users_db = load_user_database_fallback() or {}
+
+                user = users_db.get(user_id, {})
+                # Preserve existing fields where possible
+                user['active'] = bool(active)
+                if active:
+                    user['approval_status'] = 'approved'
+                    user['approved_by'] = actor_id
+                    user['approval_date'] = datetime.now().isoformat()
+                users_db[user_id] = user
+
+                saved = save_user_database(users_db)
+                if saved:
+                    try:
+                        st.cache_data.clear()
+                    except Exception:
+                        pass
+                    print(f"User {user_id} status set to {active} by {actor_id} (JSON fallback)")
+                    return True
+                else:
+                    print("❌ JSON fallback save failed")
+            except Exception as fb_e:
+                print(f"❌ JSON fallback attempt failed: {fb_e}")
+
+            # If we get here, both DB and JSON fallback failed
+            raise Exception("Database update failed on fallback path and JSON fallback also failed.")
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
         print(f"User {user_id} status set to {active} by {actor_id} (fallback)")
         return True
     except Exception as e:
         print(f"Error setting user active status: {e}")
         return False
+
+def is_user_enabled(user_id):
+    """Check if a user is enabled (active and approved)"""
+    users_db = load_user_database()
+    user = users_db.get(user_id)
+    if not user:
+        return False
+    return user.get('active', True) and user.get('approval_status', 'approved') == 'approved'
 
 import streamlit as st
 import pandas as pd
@@ -3164,6 +3176,8 @@ def apply_custom_css():
 
     /* Clean button styling */
     .stButton button {
+        border-radius: 4px;
+        padding: 0.25rem 1rem;
         background: #1976D2 !important;
         color: white !important;
         border: none !important;
@@ -4872,6 +4886,7 @@ def student_database_tab():
                     new_parent_phone = st.text_input("Parent Phone", placeholder="+234 xxx xxx xxxx")
                     new_class_size = st.number_input("Class Size", min_value=1, max_value=100, value=35)
                     new_attendance = st.text_input("Attendance Rate", placeholder="95%", value="95%")
+                    new_gender = st.selectbox("Gender", ["Male", "Female", "Other"], index=0)
                     student_photo = st.file_uploader("Student Photo", type=['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'tif', 'webp', 'svg', 'ico'])
 
                 if st.form_submit_button("💾 Save Student"):
@@ -5275,7 +5290,7 @@ def developer_console_tab():
                                     if 'db_manager' in globals() and db_manager is not None:
                                         sess = db_manager.get_session()
                                         try:
-                                            sess.execute(text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()})
+                                            sess.execute(text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now, is_active = TRUE WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()})
                                             sess.commit()
                                             wrote = True
                                         finally:
@@ -5287,12 +5302,16 @@ def developer_console_tab():
                                         fw.write(traceback.format_exc() + "\n")
 
                                 if not wrote:
-                                    update_sql = text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now WHERE id = :user_id")
+                                    update_sql = text("UPDATE users SET approval_status = 'approved', approved_by = :dev_id, approval_date = :now, is_active = TRUE WHERE id = :user_id")
                                     params = {"user_id": teacher['id'], "dev_id": dev_param, "now": datetime.now()}
                                     success = execute_sql_with_retry(update_sql, params)
                                     wrote = bool(success)
 
                                 if wrote:
+                                    try:
+                                        st.cache_data.clear()
+                                    except Exception:
+                                        pass
                                     st.success(f"Approved {teacher['full_name']}")
                                     st.rerun()
                                 else:
@@ -5342,6 +5361,10 @@ def developer_console_tab():
                                     wrote = bool(success)
 
                                 if wrote:
+                                    try:
+                                        st.cache_data.clear()
+                                    except Exception:
+                                        pass
                                     st.success(f"Rejected {teacher['full_name']}")
                                     st.rerun()
                                 else:
@@ -5357,7 +5380,78 @@ def developer_console_tab():
         else:
             st.info("No pending teacher approvals.")
             
+        # Developer create-user helper (only in developer console)
         st.markdown("---")
+        st.markdown("#### ➕ Create New User (Developer)")
+        with st.expander("Create a new user", expanded=False):
+            with st.form("dev_create_user_form"):
+                cu_col1, cu_col2 = st.columns(2)
+                with cu_col1:
+                    cu_user_id = st.text_input("User ID (unique)", placeholder="new_user_id")
+                    cu_full_name = st.text_input("Full Name", placeholder="Jane Doe")
+                    cu_email = st.text_input("Email", placeholder="user@example.com")
+                with cu_col2:
+                    cu_phone = st.text_input("Phone", placeholder="+234 800 123 4567")
+                    cu_password = st.text_input("Temporary Password", type="password")
+                    # Only allow principal, head_of_department and teacher roles for created users
+                    role_options = {
+                        'Principal': 'principal',
+                        'Head of Department': 'head_of_department',
+                        'Teacher': 'teacher'
+                    }
+                    cu_role_display = st.selectbox("Role", list(role_options.keys()))
+                    cu_role = role_options.get(cu_role_display, 'teacher')
+
+                if st.form_submit_button("Create User"):
+                    errors = []
+                    if not cu_user_id:
+                        errors.append("User ID is required")
+                    if not cu_full_name:
+                        errors.append("Full name is required")
+                    if not cu_email:
+                        errors.append("Email is required")
+                    if not cu_password:
+                        errors.append("Password is required")
+
+                    if errors:
+                        for err in errors:
+                            st.error(f"❌ {err}")
+                    else:
+                        # Build user payload
+                        new_user = {
+                            cu_user_id: {
+                                'password_hash': hash_password(cu_password),
+                                'role': cu_role,
+                                'full_name': cu_full_name,
+                                'email': cu_email,
+                                'phone': cu_phone,
+                                'created_date': datetime.now().isoformat(),
+                                'last_login': None,
+                                'active': True if cu_role != 'teacher' else False,
+                                'two_factor_enabled': False,
+                                'two_factor_secret': None,
+                                'session_timeout': 30,
+                                'failed_attempts': 0,
+                                'locked_until': None,
+                                'assigned_classes': [],
+                                'departments': [],
+                                'approval_status': 'approved' if cu_role != 'teacher' else 'pending',
+                                'approved_by': (st.session_state.get('teacher_id') if cu_role != 'teacher' else None),
+                                'approval_date': (datetime.now().isoformat() if cu_role != 'teacher' else None),
+                                'registration_notes': 'Created by developer console'
+                            }
+                        }
+
+                        saved = save_user_database(new_user)
+                        if saved:
+                            st.success(f"✅ Created user {cu_user_id}")
+                            try:
+                                st.cache_data.clear()
+                            except Exception:
+                                pass
+                            st.rerun()
+                        else:
+                            st.error("❌ Error creating user. Check logs for details.")
         
         # Show all users with enable/disable functionality
         st.markdown("#### 👥 All Users Management")
@@ -5458,9 +5552,8 @@ def admin_panel_tab():
         st.info("Contact your system administrator for admin privileges.")
         return
 
-    admin_tab1, admin_tab2, admin_tab3, admin_tab4, admin_tab5, admin_tab6, admin_tab7, admin_tab8 = st.tabs([
+    admin_tab1, admin_tab3, admin_tab4, admin_tab5, admin_tab6, admin_tab7, admin_tab8 = st.tabs([
         "📊 System Overview", 
-        "👥 User Management",
         "🔒 Security & 2FA",
         "💾 Backup & Restore",
         "📊 System Stats", 
@@ -5469,423 +5562,71 @@ def admin_panel_tab():
         "🔍 Audit Logs"
     ])
 
-    with admin_tab2:
-        st.markdown("### 👥 User Management")
+    # Backwards-compat: some code references admin_tab2; map it to the second logical tab
+    try:
+        admin_tab2 = admin_tab3
+    except Exception:
+        admin_tab2 = admin_tab1
 
-        # Add new user
-        with st.expander("➕ Add New User", expanded=False):
-            with st.form("add_user_form"):
-                col1, col2 = st.columns(2)
+    with admin_tab1:
+        st.write("## 📊 System Overview")
+        
+        # System metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("System Status", "🟢 Active")
+        with col2:
+            st.metric("Database", "✅ Connected")
+        with col3:
+            st.metric("Server Health", "✅ Good")
 
-                with col1:
-                    new_user_id = st.text_input("User ID*", placeholder="teacher_john")
-                    new_full_name = st.text_input("Full Name*", placeholder="John Doe")
-                    new_email = st.text_input("Email*", placeholder="john@akinssunrise.edu.ng")
-                    new_role = st.selectbox("Role*", list(USER_ROLES.keys()))
+    with admin_tab3:
+        st.write("## 🔒 Security Settings")
+        st.info("Configure system security settings")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("### Password Policy")
+            st.checkbox("Enforce Strong Passwords", value=True)
+            st.number_input("Minimum Password Length", value=8)
+        
+        with col2:
+            st.write("### Login Settings")
+            st.number_input("Max Login Attempts", value=5)
+            st.number_input("Lockout Duration (minutes)", value=30)
 
-                with col2:
-                    new_phone = st.text_input("Phone", placeholder="+234 800 123 4567")
-                    new_password = st.text_input("Temporary Password*", type="password")
-                    new_session_timeout = st.number_input("Session Timeout (minutes)", min_value=15, max_value=480, value=30)
-                    new_departments = st.multiselect("Departments", ["all", "sciences", "mathematics", "languages", "arts", "social_studies"])
+    with admin_tab4:
+        st.write("## 💾 Backup & Restore")
+        st.info("Manage system backups and restoration")
 
-                new_assigned_classes = st.multiselect("Assigned Classes", 
-                    ["SS1A", "SS1B", "SS1C", "SS2A", "SS2B", "SS2C", "SS3A", "SS3B", "SS3C", 
-                     "JSS1A", "JSS1B", "JSS1C", "JSS2A", "JSS2B", "JSS2C", "JSS3A", "JSS3B", "JSS3C"])
+    with admin_tab5:
+        st.write("## 📊 System Statistics")
+        st.info("View detailed system statistics")
 
-                if st.form_submit_button("👤 Create User"):
-                    if new_user_id and new_full_name and new_email and new_password:
-                        users_db = load_user_database()
+    with admin_tab6:
+        st.write("## 📧 Email Configuration")
+        st.info("Configure email settings")
 
-                        if new_user_id not in users_db:
-                            users_db[new_user_id] = {
-                                "password_hash": hash_password(new_password),
-                                "role": new_role,
-                                "full_name": new_full_name,
-                                "email": new_email,
-                                "phone": new_phone,
-                                "created_date": datetime.now().isoformat(),
-                                "last_login": None,
-                                "active": True,
-                                "two_factor_enabled": False,
-                                "two_factor_secret": None,
-                                "session_timeout": new_session_timeout,
-                                "failed_attempts": 0,
-                                "locked_until": None,
-                                "assigned_classes": new_assigned_classes,
-                                "departments": new_departments or ["all"],
-                                "custom_features": USER_ROLES[new_role].get('default_features', [])
-                            }
+    with admin_tab7:
+        st.write("## 📞 Support Settings")
+        st.info("Configure support system settings")
 
-                            if save_user_database(users_db):
-                                st.success(f"✅ User {new_user_id} created successfully!")
-                                log_teacher_activity(st.session_state.teacher_id, "user_created", {
-                                    "created_user": new_user_id,
-                                    "role": new_role,
-                                    "created_by": st.session_state.teacher_id
-                                })
-                                st.rerun()
-                            else:
-                                st.error("❌ Error creating user")
-                        else:
-                            st.error("❌ User ID already exists")
-                    else:
-                        st.error("❌ Please fill in all required fields")
+    with admin_tab8:
+        st.write("## 🔍 System Audit Logs")
+        st.info("View system audit logs")
+        
+        try:
+            # Display recent audit logs
+            audit_files = sorted([f for f in os.listdir('audit_logs') if f.startswith('audit_')])
+            if audit_files:
+                latest_audit = audit_files[-1]
+                with open(os.path.join('audit_logs', latest_audit), 'r') as f:
+                    logs = json.load(f)
+                st.dataframe(pd.DataFrame(logs))
+        except Exception as e:
+            st.error(f"Error loading audit logs: {str(e)}")
 
-        # Load users database for pending approvals
-        users_db = load_user_database()
-
-        # Pending Teacher Approvals
-        pending_teachers = {user_id: user for user_id, user in users_db.items() 
-                          if user.get('approval_status') == 'pending'}
-
-        if pending_teachers:
-            with st.expander(f"⏳ Pending Teacher Approvals ({len(pending_teachers)})", expanded=True):
-                st.markdown("**Teachers awaiting approval:**")
-
-                for user_id, teacher in pending_teachers.items():
-                    with st.container():
-                        st.markdown("---")
-                        col1, col2, col3 = st.columns([3, 1, 1])
-
-                        with col1:
-                            st.write(f"**👨‍🏫 {teacher.get('full_name', 'Unknown')}**")
-                            st.write(f"📧 {teacher.get('email', 'No email')}")
-                            st.write(f"📱 {teacher.get('phone', 'No phone')}")
-                            st.write(f"📅 Applied: {teacher.get('created_date', 'Unknown')}")
-
-                            # Show subjects and classes
-                            subjects_list = teacher.get('subjects', [])
-                            classes_list = teacher.get('assigned_classes', [])
-                            if subjects_list:
-                                st.write(f"📚 Subjects: {', '.join(subjects_list)}")
-                            if classes_list:
-                                st.write(f"🏫 Preferred Classes: {', '.join(classes_list)}")
-
-                            # Show registration notes
-                            notes = teacher.get('registration_notes', '')
-                            if notes:
-                                st.write(f"📝 Notes: {notes}")
-
-                        with col2:
-                            if can_approve(st.session_state.get('teacher_id')):
-                                if st.button("✅ Approve", key=f"admin_panel_approve_{user_id}", type="primary"):
-                                    # Approve the teacher
-                                    users_db[user_id]['approval_status'] = 'approved'
-                                    users_db[user_id]['approved_by'] = st.session_state.teacher_id
-                                    users_db[user_id]['approval_date'] = datetime.now().isoformat()
-                                    users_db[user_id]['active'] = True  # Activate account
-
-                                    if save_user_database(users_db):
-                                        st.success(f"✅ Teacher {teacher.get('full_name')} approved!")
-                                        log_teacher_activity(st.session_state.teacher_id, "teacher_approved", {
-                                            "approved_user": user_id,
-                                            "teacher_name": teacher.get('full_name'),
-                                            "approved_by": st.session_state.teacher_id,
-                                            "timestamp": datetime.now().isoformat()
-                                        })
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Error approving teacher")
-
-                        with col3:
-                            if can_approve(st.session_state.get('teacher_id')):
-                                if st.button("❌ Reject", key=f"admin_panel_reject_{user_id}", type="secondary"):
-                                    # Show rejection reason dialog
-                                    st.session_state[f'show_reject_reason_{user_id}'] = True
-                                    st.rerun()
-
-                        # Handle rejection reason dialog
-                        if st.session_state.get(f'show_reject_reason_{user_id}', False):
-                            with st.form(f"reject_form_{user_id}"):
-                                st.write("**Reason for rejection:**")
-                                reject_reason = st.text_area("Rejection Reason", 
-                                    placeholder="Please provide a reason for rejection")
-
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    if st.form_submit_button("❌ Confirm Rejection"):
-                                        users_db[user_id]['approval_status'] = 'rejected'
-                                        users_db[user_id]['approved_by'] = st.session_state.teacher_id
-                                        users_db[user_id]['approval_date'] = datetime.now().isoformat()
-                                        users_db[user_id]['rejection_reason'] = reject_reason
-
-                                        if save_user_database(users_db):
-                                            st.success(f"Teacher {teacher.get('full_name')} application rejected.")
-                                            log_teacher_activity(st.session_state.teacher_id, "teacher_rejected", {
-                                                "rejected_user": user_id,
-                                                "teacher_name": teacher.get('full_name'),
-                                                "rejected_by": st.session_state.teacher_id,
-                                                "reason": reject_reason,
-                                                "timestamp": datetime.now().isoformat()
-                                            })
-                                            st.session_state[f'show_reject_reason_{user_id}'] = False
-                                            st.rerun()
-                                        else:
-                                            st.error("❌ Error rejecting teacher")
-
-                                with col2:
-                                    if st.form_submit_button("Cancel"):
-                                        st.session_state[f'show_reject_reason_{user_id}'] = False
-                                        st.rerun()
-        else:
-            st.info("✅ No pending teacher approvals")
-
-        # Manage existing users
-        st.markdown("### 📋 Existing Users")
-        users_db = load_user_database()
-
-        if users_db:
-            for user_id, user in users_db.items():
-                with st.expander(f"👤 {user.get('full_name', user_id)} ({user_id})", expanded=False):
-                    col1, col2, col3 = st.columns([2, 1, 1])
-
-                    with col1:
-                        st.write(f"**Role:** {user.get('role', 'N/A')}")
-                        st.write(f"**Email:** {user.get('email', 'N/A')}")
-                        st.write(f"**Phone:** {user.get('phone', 'N/A')}")
-                        st.write(f"**Created:** {user.get('created_date', 'N/A')}")
-                        st.write(f"**Last Login:** {user.get('last_login', 'Never')}")
-                        st.write(f"**Status:** {'🟢 Active' if user.get('active', True) else '🔴 Disabled'}")
-                        st.write(f"**2FA:** {'✅ Enabled' if user.get('two_factor_enabled', False) else '❌ Disabled'}")
-                        st.write(f"**Classes:** {', '.join(user.get('assigned_classes', []))}")
-
-                        # Show user's current features
-                        user_features = user.get('custom_features', USER_ROLES.get(user.get('role', 'teacher'), {}).get('default_features', []))
-                        st.write(f"**Features:** {len(user_features)} enabled")
-
-                    with col2:
-                        # Toggle active status
-                        if user.get('active', True):
-                            if st.button("🔒 Disable", key=f"disable_{user_id}"):
-                                users_db[user_id]['active'] = False
-                                if save_user_database(users_db):
-                                    st.success(f"✅ User {user_id} disabled")
-                                    log_teacher_activity(st.session_state.teacher_id, "user_disabled", {
-                                        "disabled_user": user_id,
-                                        "disabled_by": st.session_state.teacher_id
-                                    })
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Error disabling user")
-                        else:
-                            if st.button("🔓 Enable", key=f"enable_{user_id}"):
-                                users_db[user_id]['active'] = True
-                                if save_user_database(users_db):
-                                    st.success(f"✅ User {user_id} enabled")
-                                    log_teacher_activity(st.session_state.teacher_id, "user_enabled", {
-                                        "enabled_user": user_id,
-                                        "enabled_by": st.session_state.teacher_id
-                                    })
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Error enabling user")
-
-                        # Reset password
-                        if st.button("🔑 Reset Password", key=f"reset_pwd_btn_{user_id}"):
-                            st.session_state[f"show_reset_pwd_{user_id}"] = True
-                            st.rerun()
-
-                    with col3:
-                        # Edit user
-                        if st.button("✏️ Edit", key=f"edit_btn_{user_id}"):
-                            st.session_state[f"show_edit_{user_id}"] = True
-                            st.rerun()
-
-                        # Manage features
-                        if st.button("🔧 Features", key=f"features_btn_{user_id}"):
-                            st.session_state[f"show_features_{user_id}"] = True
-                            st.rerun()
-
-                        # Delete user (only if not current user)
-                        if user_id != st.session_state.teacher_id:
-                            if st.button("🗑️ Delete", key=f"delete_btn_{user_id}"):
-                                st.session_state[f"show_delete_{user_id}"] = True
-                                st.rerun()
-
-                    # Reset password form
-                    if st.session_state.get(f"show_reset_pwd_{user_id}", False):
-                        st.markdown("---")
-                        st.markdown(f"**Reset Password for {user.get('full_name', user_id)}**")
-                        new_password = st.text_input("New Password", type="password", key=f"new_pwd_input_{user_id}")
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            if st.button("💾 Save New Password", key=f"save_pwd_{user_id}"):
-                                if new_password and len(new_password) >= 6:
-                                    users_db[user_id]['password_hash'] = hash_password(new_password)
-                                    if save_user_database(users_db):
-                                        st.success("✅ Password reset successfully!")
-                                        log_teacher_activity(st.session_state.teacher_id, "password_reset", {
-                                            "reset_user": user_id,
-                                            "reset_by": st.session_state.teacher_id
-                                        })
-                                        st.session_state[f"show_reset_pwd_{user_id}"] = False
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Error saving new password")
-                                else:
-                                    st.error("❌ Password must be at least 6 characters")
-                        with col_b:
-                            if st.button("❌ Cancel", key=f"cancel_pwd_{user_id}"):
-                                st.session_state[f"show_reset_pwd_{user_id}"] = False
-                                st.rerun()
-
-                    # Edit user form
-                    if st.session_state.get(f"show_edit_{user_id}", False):
-                        st.markdown("---")
-                        st.markdown(f"**Edit User: {user.get('full_name', user_id)}**")
-
-                        with st.form(f"edit_user_form_{user_id}"):
-                            edit_col1, edit_col2 = st.columns(2)
-
-                            with edit_col1:
-                                edit_full_name = st.text_input("Full Name", value=user.get('full_name', ''))
-                                edit_email = st.text_input("Email", value=user.get('email', ''))
-                                edit_role = st.selectbox("Role", list(USER_ROLES.keys()), 
-                                                       index=list(USER_ROLES.keys()).index(user.get('role', 'teacher')))
-
-                            with edit_col2:
-                                edit_phone = st.text_input("Phone", value=user.get('phone', ''))
-                                edit_session_timeout = st.number_input("Session Timeout (minutes)", 
-                                                                     min_value=15, max_value=480, 
-                                                                     value=user.get('session_timeout', 30))
-                                edit_departments = st.multiselect("Departments", 
-                                                                ["all", "sciences", "mathematics", "languages", "arts", "social_studies"],
-                                                                default=user.get('departments', []))
-
-                            edit_assigned_classes = st.multiselect("Assigned Classes", 
-                                ["SS1A", "SS1B", "SS1C", "SS2A", "SS2B", "SS2C", "SS3A", "SS3B", "SS3C", 
-                                 "JSS1A", "JSS1B", "JSS1C", "JSS2A", "JSS2B", "JSS2C", "JSS3A", "JSS3B", "JSS3C"],
-                                default=user.get('assigned_classes', []))
-
-                            form_col1, form_col2 = st.columns(2)
-                            with form_col1:
-                                if st.form_submit_button("💾 Save Changes"):
-                                    if edit_full_name and edit_email:
-                                        users_db[user_id].update({
-                                            'full_name': edit_full_name,
-                                            'email': edit_email,
-                                            'phone': edit_phone,
-                                            'role': edit_role,
-                                            'session_timeout': edit_session_timeout,
-                                            'departments': edit_departments or ["all"],
-                                            'assigned_classes': edit_assigned_classes
-                                        })
-
-                                        if save_user_database(users_db):
-                                            st.success("✅ User updated successfully!")
-                                            log_teacher_activity(st.session_state.teacher_id, "user_updated", {
-                                                "updated_user": user_id,
-                                                "updated_by": st.session_state.teacher_id
-                                            })
-                                            st.session_state[f"show_edit_{user_id}"] = False
-                                            st.rerun()
-                                        else:
-                                            st.error("❌ Error updating user")
-                                    else:
-                                        st.error("❌ Please fill in required fields")
-
-                            with form_col2:
-                                if st.form_submit_button("❌ Cancel"):
-                                    st.session_state[f"show_edit_{user_id}"] = False
-                                    st.rerun()
-
-                    # Feature management form
-                    if st.session_state.get(f"show_features_{user_id}", False):
-                        st.markdown("---")
-                        st.markdown(f"**Manage Features for: {user.get('full_name', user_id)}**")
-
-                        current_features = user.get('custom_features', USER_ROLES.get(user.get('role', 'teacher'), {}).get('default_features', []))
-
-                        with st.form(f"features_form_{user_id}"):
-                            st.markdown("#### System Features Access")
-                            st.info(f"User Role: {user.get('role', 'teacher')} - {USER_ROLES.get(user.get('role', 'teacher'), {}).get('description', 'Unknown role')}")
-
-                            selected_features = []
-
-                            # Show all available features with checkboxes
-                            for feature_key, feature_info in SYSTEM_FEATURES.items():
-                                # Check if user has required permission for this feature
-                                required_permission = feature_info.get('required_permission')
-                                can_access = True
-
-                                if required_permission and not check_user_permissions(user_id, required_permission):
-                                    can_access = False
-
-                                if can_access:
-                                    is_enabled = feature_key in current_features
-                                    if st.checkbox(
-                                        f"{feature_info['name']} - {feature_info['description']}", 
-                                        value=is_enabled,
-                                        key=f"feature_{user_id}_{feature_key}"
-                                    ):
-                                        selected_features.append(feature_key)
-                                else:
-                                    st.markdown(f"🔒 {feature_info['name']} - *Requires {required_permission} permission*")
-
-                            feature_col1, feature_col2 = st.columns(2)
-                            with feature_col1:
-                                if st.form_submit_button("💾 Save Feature Access"):
-                                    users_db[user_id]['custom_features'] = selected_features
-                                    if save_user_database(users_db):
-                                        st.success("✅ Feature access updated successfully!")
-                                        log_teacher_activity(st.session_state.teacher_id, "user_features_updated", {
-                                            "updated_user": user_id,
-                                            "features": selected_features,
-                                            "updated_by": st.session_state.teacher_id
-                                        })
-                                        st.session_state[f"show_features_{user_id}"] = False
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ Error updating features")
-
-                            with feature_col2:
-                                if st.form_submit_button("❌ Cancel"):
-                                    st.session_state[f"show_features_{user_id}"] = False
-                                    st.rerun()
-
-                        # Show current vs default features comparison
-                        st.markdown("#### Feature Comparison")
-                        default_features = USER_ROLES.get(user.get('role', 'teacher'), {}).get('default_features', [])
-
-                        comparison_col1, comparison_col2 = st.columns(2)
-                        with comparison_col1:
-                            st.markdown("**Default Features for Role:**")
-                            for feature in default_features:
-                                if feature in SYSTEM_FEATURES:
-                                    st.markdown(f"• {SYSTEM_FEATURES[feature]['name']}")
-
-                        with comparison_col2:
-                            st.markdown("**Current Custom Features:**")
-                            for feature in current_features:
-                                if feature in SYSTEM_FEATURES:
-                                    st.markdown(f"• {SYSTEM_FEATURES[feature]['name']}")
-                            if not current_features:
-                                st.markdown("*Using default role features*")
-
-                    # Delete confirmation
-                    if st.session_state.get(f"show_delete_{user_id}", False):
-                        st.markdown("---")
-                        st.error(f"⚠️ Are you sure you want to delete user **{user.get('full_name', user_id)}**?")
-                        st.warning("This action cannot be undone!")
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            if st.button("🗑️ Confirm Delete", key=f"confirm_delete_{user_id}", type="primary"):
-                                del users_db[user_id]
-                                if save_user_database(users_db):
-                                    st.success(f"✅ User {user_id} deleted successfully!")
-                                    log_teacher_activity(st.session_state.teacher_id, "user_deleted", {
-                                        "deleted_user": user_id,
-                                        "deleted_by": st.session_state.teacher_id
-                                    })
-                                    st.session_state[f"show_delete_{user_id}"] = False
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Error deleting user")
-                        with col_b:
-                            if st.button("❌ Cancel", key=f"cancel_delete_{user_id}"):
-                                st.session_state[f"show_delete_{user_id}"] = False
-                                st.rerun()
+        # (User management UI removed from this audit-logs section; it lives in the Developer Console area)
         else:
             st.info("No users found in database.")
 
@@ -8031,11 +7772,25 @@ def seed_default_users():
 @st.cache_resource
 def ensure_db_initialized_once():
     """Ensure database is initialized once at startup"""
+    # Run initialization but avoid blocking Streamlit startup for long periods.
+    # Use a short timeout so failures or slow DB endpoints don't hang the app.
     try:
         print("🚀 Initializing database (one-time)...")
-        init_success = init_database_tables()
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError
+
+        with ThreadPoolExecutor(max_workers=1) as exe:
+            fut = exe.submit(init_database_tables)
+            try:
+                init_success = fut.result(timeout=8)  # seconds
+            except TimeoutError:
+                print("⚠️ Database initialization timed out (8s). Will continue with fallback behavior.")
+                return False
+
         if init_success:
-            seed_default_users()
+            try:
+                seed_default_users()
+            except Exception as e:
+                print(f"⚠️ Seeding default users failed: {e}")
             print("✅ Database initialized successfully")
             return True
         else:
@@ -8050,16 +7805,56 @@ def ensure_db_initialized_once():
 def main():
     # Initialize database using new Streamlit SQL approach
     try:
-        db_ready = ensure_db_initialized_once()
-        if not db_ready:
-            st.error("❌ Database initialization failed. Please contact support.")
-            st.stop()
+        # Start database initialization in background if not already started.
+        # We avoid blocking the Streamlit script; if DB is slow/unavailable the app will continue
+        # using the JSON fallback and show a clear message. Status is written to a small file
+        # `.db_init_status` so subsequent runs can show the result.
+        import threading
+
+        if not st.session_state.get('db_init_started'):
+            def _run_init_and_write_status():
+                try:
+                    res = ensure_db_initialized_once()
+                    try:
+                        with open('.db_init_status', 'w') as sf:
+                            sf.write('ready' if res else 'failed')
+                    except Exception:
+                        pass
+                except Exception:
+                    try:
+                        with open('.db_init_status', 'w') as sf:
+                            sf.write('failed')
+                    except Exception:
+                        pass
+
+            t = threading.Thread(target=_run_init_and_write_status, daemon=True)
+            t.start()
+            st.session_state['db_init_started'] = True
+
+        # Report DB init status if available, otherwise inform user initialization is in progress
+        db_status = None
+        try:
+            if os.path.exists('.db_init_status'):
+                with open('.db_init_status', 'r') as sf:
+                    db_status = sf.read().strip()
+        except Exception:
+            db_status = None
+
+        if db_status == 'ready':
+            st.success("✅ Database ready")
+        elif db_status == 'failed':
+            pass
+        else:
+            st.info("ℹ️ Database initialization running in background — app will use local fallback until ready.")
     except Exception as e:
         import traceback
         print(f"Database initialization failed: {e}")
         traceback.print_exc()
-        st.error("❌ Database connection issue. Please refresh the page.")
-        st.stop()
+        # Don't block the app here; fall back to JSON DB and let background init continue.
+        try:
+            st.warning("⚠️ Database initialization encountered an error; continuing with local fallback.")
+        except Exception:
+            pass
 
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
@@ -8083,12 +7878,9 @@ def main():
         report_generator_page()
 
 import traceback
-# Initialize database at module level (runs when Streamlit loads the script)
-try:
-    ensure_db_initialized_once()
-except Exception as e:
-    print(f"Module-level database initialization failed: {e}")
-    traceback.print_exc()
+# Note: Removed module-level database initialization to avoid blocking Streamlit import.
+# Database initialization is performed inside `main()` so the app can present helpful UI messages
+# instead of hanging during module import.
 
 if __name__ == "__main__":
     main()

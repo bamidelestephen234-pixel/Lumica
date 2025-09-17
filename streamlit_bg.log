@@ -1,0 +1,53 @@
+nohup: ignoring input
+
+Collecting usage statistics. To deactivate, set browser.gatherUsageStats to false.
+
+
+  You can now view your Streamlit app in your browser.
+
+  URL: http://0.0.0.0:8501
+
+2025-09-17 16:10:32.927 Thread 'Thread-7 (_run_init_and_write_status)': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:32.927 Thread 'Thread-7 (_run_init_and_write_status)': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:32.928 Thread 'Thread-7 (_run_init_and_write_status)': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:32.928 Thread 'Thread-7 (_run_init_and_write_status)': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.002 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.003 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.003 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.003 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.024 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.024 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.024 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.032 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.032 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.032 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.032 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.141 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.142 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.143 Thread 'ThreadPoolExecutor-1_0': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.434 Thread 'Thread-8': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.435 Thread 'Thread-8': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:10:33.435 Thread 'Thread-8': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:11:33.482 Thread 'Thread-7 (_run_init_and_write_status)': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:11:33.482 Thread 'Thread-7 (_run_init_and_write_status)': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+2025-09-17 16:11:33.482 Thread 'Thread-7 (_run_init_and_write_status)': missing ScriptRunContext! This warning can be ignored when running in bare mode.
+DEBUG: st.secrets at startup: 1 secret(s) loaded: ['DATABASE_URL']
+✅ SQLAlchemy text() available for secure authentication
+🚀 Initializing database (one-time)...
+🔄 Initializing database tables...
+✅ System activated with key: 1603-2PU6-9QVD-GDER
+Logo loaded from school_logo.png, size: 304452 characters
+⚠️ Database initialization timed out (8s). Will continue with fallback behavior.
+⚠️ Users table creation issue: (psycopg2.OperationalError) connection to server at "aws-1-eu-west-2.pooler.supabase.com" (13.43.174.140), port 5432 failed: FATAL:  MaxClientsInSessionMode: max clients reached - in Session mode max clients are limited to pool_size
+
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+✅ Activation keys table ready
+✅ Students table ready
+✅ Authentication columns ensured
+✅ Database indexes created
+✅ Database initialization complete - 2 tables ready
+DEBUG: st.secrets at startup: 1 secret(s) loaded: ['DATABASE_URL']
+✅ SQLAlchemy text() available for secure authentication
+✅ System activated with key: 1603-2PU6-9QVD-GDER
+Logo loaded from school_logo.png, size: 304452 characters
+  Stopping...

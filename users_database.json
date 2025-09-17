@@ -1,6 +1,6 @@
 {
   "11111111-1111-1111-1111-111111111111": {
-    "password_hash": "4e962fb2d3d19139b79ded493d6fe3c1e263e9fdd9e5e598e7122b646eaf232948740b56f8be02586e26217558f0554e",
+    "password_hash": "<redacted_hash>",
     "role": "Principal",
     "full_name": "Administrator Bamstep",
     "email": "bamidelestephen441@gmail.com",
@@ -17,18 +17,41 @@
     "departments": [],
     "approval_status": "approved",
     "approved_by": null,
-    "approval_date": "NaT",
+    "approval_date": null,
     "registration_notes": null
   },
-  "teacher_eric": {
-    "password_hash": "65796d0de6466698230d67c596f0df5c175a461e5c91b5aabd9bee5b03d7cb6afeeb88cc26ac8b02735577900e6f52eb",
+  "developer_001": {
+    "password_hash": "<redacted_hash>",
+    "role": "developer",
+    "full_name": "System Developer",
+    "email": "developer@akinssunrise.edu.ng",
+    "phone": "+234-000-000-0000",
+    "created_date": "2025-09-17T00:00:00.000000",
+    "last_login": null,
+    "active": true,
+    "two_factor_enabled": false,
+    "two_factor_secret": null,
+    "session_timeout": 30,
+    "failed_attempts": 0,
+    "locked_until": null,
+    "assigned_classes": [],
+    "departments": [
+      "all"
+    ],
+    "approval_status": "approved",
+    "approved_by": null,
+    "approval_date": null,
+    "registration_notes": "System Developer Account"
+  },
+  "teacher_bamstep": {
+    "password_hash": "<redacted_hash>",
     "role": "teacher",
-    "full_name": "Joe eric",
-    "email": "bamidelestephen224@gmail.com",
-    "phone": "+2349024366300",
-    "created_date": "2025-09-13T23:56:52.537256",
-    "last_login": "2025-09-14T16:29:23.067496",
-    "active": false,
+    "full_name": "Teacher Bamstep",
+    "email": "bamstep@example.com",
+    "phone": "+234-000-000-0001",
+    "created_date": "2025-09-15T00:00:00.000000",
+    "last_login": null,
+    "active": true,
     "two_factor_enabled": false,
     "two_factor_secret": null,
     "session_timeout": 30,
@@ -37,4 +60,29 @@
     "assigned_classes": [],
     "departments": [],
     "approval_status": "approved",
-    "approved_by": 
+    "approved_by": null,
+    "approval_date": null,
+    "registration_notes": "Disabled account as per requirements"
+  },
+  "test_user": {
+    "password_hash": "9b8e40b2ceacdbeea9733fe9ef9d9c8c92f386c959b128ecafaac67caedc0f64646e2ac49a9569cd4f23d872a10df15b",
+    "role": "teacher",
+    "full_name": "Test User",
+    "email": "test_user@example.com",
+    "phone": "+000",
+    "created_date": "2025-09-17T00:00:00",
+    "last_login": null,
+    "active": true,
+    "two_factor_enabled": false,
+    "two_factor_secret": null,
+    "session_timeout": 30,
+    "failed_attempts": 0,
+    "locked_until": null,
+    "assigned_classes": [],
+    "departments": [],
+    "approval_status": "approved",
+    "approved_by": null,
+    "approval_date": null,
+    "registration_notes": null
+  }
+}
