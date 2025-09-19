@@ -52,7 +52,7 @@ def developer_console_ui():
                                         sess.commit()
                                         wrote = True
                                     finally:
-                                        sess.close()
+                                        db_manager.close_session(sess)
                             except Exception as e_sql:
                                 with open('dev_actions.log', 'a') as fw:
                                     import traceback
