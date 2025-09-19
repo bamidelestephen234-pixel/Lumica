@@ -5246,66 +5246,54 @@ def verification_tab():
         try:
             from database.verification_keys import get_key
             key_record = get_key(verification_key_input)
-                
-            if not key_record:
-                st.error("❌ Invalid verification key. Please check and try again.")
-                return
-                
-            if key_record['result_id'] != report_id:
-                st.error("❌ This verification key is not associated with this report.")
-                st.info(f"The provided key is for report: {key_record['result_id']}")
-                return
-                
-            st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")
+        except Exception as e:
+            st.error(f"❌ Verification failed. Please try again in a moment. Error: {str(e)}")
+            return
 
-            # Show report details if available
-            try:
-                report_file = f"approved_reports/approved_{report_id}.json"
-                if os.path.exists(report_file):
-                    with open(report_file, 'r') as f:
-                        report_data = json.load(f)
-                        st.write("### Report Details:")
-                        st.write(f"**Student:** {report_data.get('student_name', 'N/A')}")
-                        st.write(f"**Class:** {report_data.get('student_class', 'N/A')}")
-                        st.write(f"**Term:** {report_data.get('term', 'N/A')}")
-                else:
-                    st.warning("⚠️ Report file not found. The report may have been archived.")
-                    except Exception as e:
-                        st.error(f"❌ Verification failed. Please try again in a moment. Error: {str(e)}")
+        if not key_record:
+            st.error("❌ Invalid verification key. Please check and try again.")
+            return
 
-                    # Locate report JSON in approved_reports or report_backup
-                    report_found = False
-                    report_data = None
-                    approved_dir = "approved_reports"
-                    if os.path.exists(approved_dir):
-                        for filename in os.listdir(approved_dir):
-                            if filename.endswith('.json'):
-                                filepath = os.path.join(approved_dir, filename)
-                                try:
-                                    with open(filepath, 'r') as f:
-                                        report = json.load(f)
-                                        if report.get('report_id') == report_id:
-                                            report_found = True
-                                            report_data = report
-                                            break
-                                except Exception:
-                                    continue
+        if key_record['result_id'] != report_id:
+            st.error("❌ This verification key is not associated with this report.")
+            st.info(f"The provided key is for report: {key_record['result_id']}")
+            return
 
-                    if not report_found:
-                        backup_dir = "report_backup"
-                        if os.path.exists(backup_dir):
-                            for filename in os.listdir(backup_dir):
-                                if filename.endswith('.json'):
-                                    filepath = os.path.join(backup_dir, filename)
-                                    try:
-                                        with open(filepath, 'r') as f:
-                                            report = json.load(f)
-                                            if report.get('report_id') == report_id:
-                                                report_found = True
-                                                report_data = report
-                                                break
-                                    except Exception:
-                                        continue
+        st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")
+
+        # Locate report JSON in approved_reports or report_backup
+        report_found = False
+        report_data = None
+        approved_dir = "approved_reports"
+        if os.path.exists(approved_dir):
+            for filename in os.listdir(approved_dir):
+                if filename.endswith('.json'):
+                    filepath = os.path.join(approved_dir, filename)
+                    try:
+                        with open(filepath, 'r') as f:
+                            report = json.load(f)
+                            if report.get('report_id') == report_id:
+                                report_found = True
+                                report_data = report
+                                break
+                    except Exception:
+                        continue
+
+        if not report_found:
+            backup_dir = "report_backup"
+            if os.path.exists(backup_dir):
+                for filename in os.listdir(backup_dir):
+                    if filename.endswith('.json'):
+                        filepath = os.path.join(backup_dir, filename)
+                        try:
+                            with open(filepath, 'r') as f:
+                                report = json.load(f)
+                                if report.get('report_id') == report_id:
+                                    report_found = True
+                                    report_data = report
+                                    break
+                        except Exception:
+                            continue
 
                     # If found, render details (student, scores, auth info) and allow PDF download
                     if report_found and report_data:
