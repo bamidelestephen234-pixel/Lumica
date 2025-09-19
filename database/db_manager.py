@@ -1,13 +1,14 @@
 # database/db_manager.py
 import os
 import uuid
+import time
 from datetime import datetime
 import streamlit as st
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
-# Import your Base and password hashing fr
-# om existing modules
+# Import your Base and password hashing from existing modules
 from database.models import Base
 from utils.security import hash_password  # adjust import path if needed
 
@@ -15,7 +16,7 @@ from utils.security import hash_password  # adjust import path if needed
 @st.cache_resource
 def get_engine():
     """
-    Create a restart-safe SQLAlchemy engine with connection recycling.
+    Create a restart-safe SQLAlchemy engine.
     Reads DATABASE_URL from Streamlit secrets or environment variables.
     """
     try:
@@ -28,157 +29,43 @@ def get_engine():
             "Please configure this in your Streamlit Cloud dashboard "
             "under 'Manage app' -> 'Secrets'"
         )
-    return create_engine(
+
+    engine = create_engine(
         db_url.strip(),
-        pool_pre_ping=True,
-        pool_recycle=60,  # Recycle connections every minute
-        pool_size=1,  # Absolute minimum pool size for Supabase
-        max_overflow=0,  # No overflow connections
-        pool_timeout=5,  # Shorter timeout to fail fast
-        pool_use_lifo=True  # Use last-in-first-out for better connection reuse
-        pool_use_lifo=True,  # Use last-in-first-out for better connection reuse
-        echo_pool=True  # Log pool events for debugging
-    )
-
-def get_session():
-    """
-    Get a new SQLAlchemy session.
-    Always close it after use: 
-        session = get_session()
-        try:
-            ...
-        finally:
-            session.close()
-    """
-    engine = get_engine()
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    session = SessionLocal()
-    session.engine = engine  # Keep a reference to the engine
-    return session
-
-# --- Schema migration ---
-def ensure_schema():
-    """
-    Create all tables and ensure required columns exist.
-    """
-    engine = get_engine()
-    
-    # First, create all tables from models
-    Base.metadata.create_all(engine)
-    
-    # Then ensure additional columns exist
-    with engine.begin() as conn:
-        # Users table additional columns
-        try:
-            conn.execute(text("""
-                ALTER TABLE users
-                ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved',
-                ADD COLUMN IF NOT EXISTS approved_by TEXT NULL,
-                ADD COLUMN IF NOT EXISTS approval_date TIMESTAMP NULL,
-                ADD COLUMN IF NOT EXISTS registration_notes TEXT NULL,
-                ADD COLUMN IF NOT EXISTS failed_attempts INTEGER DEFAULT 0,
-                ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP NULL,
-                ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN DEFAULT FALSE,
-                ADD COLUMN IF NOT EXISTS two_factor_secret TEXT NULL,
-                ADD COLUMN IF NOT EXISTS session_timeout INTEGER DEFAULT 30,
-                ADD COLUMN IF NOT EXISTS assigned_classes TEXT NULL,
-                ADD COLUMN IF NOT EXISTS departments TEXT NULL,
-                ADD COLUMN IF NOT EXISTS custom_features TEXT NULL,
-                ADD COLUMN IF NOT EXISTS subjects TEXT NULL;
-            """))
-        except Exception as e:
-            print(f"Note: Some user table columns may already exist: {e}")
-        
-        # Students table additional columns
-        try:
-            conn.execute(text("""
-                ALTER TABLE students
-                ADD COLUMN IF NOT EXISTS class_name TEXT NULL;
-            """))
-        except Exception as e:
-            print(f"Note: Some student table columns may already exist: {e}")
-
-# --- Safe seeding ---
-def seed_default_users():
-    """
-    Insert default users only if they don't already exist.
-    Uses ON CONFLICT DO NOTHING to avoid duplicate key errors.
-    """
-    engine = get_engine()
-    default_users = [
-        {
-            "id": "teacher_eric",  # fixed ID for known account
-            "full_name": "Joe Eric",
-            "email": "bamidelestephen224",
-            "password_hash": hash_password("admin789"),
-            "role": "principal",
-            "phone": "+234-XXX-XXX-XXXX",
-            "is_active": True,
-            "created_date": datetime.utcnow(),
-            "approval_status": "approved",
-            "approved_by": None,
-            "approval_date": None,
-            "registration_notes": None
+        poolclass=NullPool,  # Disable connection pooling to avoid Supabase limits
+        connect_args={
+            'connect_timeout': 10,  # 10 second connection timeout
+            'application_name': 'lumica_app'  # Identify our app in database logs
         }
-    ]
-    with engine.begin() as conn:
-        for user in default_users:
-            conn.execute(text("""
-                INSERT INTO users (
-                    id, full_name, email, password_hash, role, phone, is_active,
-                    created_date, approval_status, approved_by, approval_date, registration_notes
-                )
-                VALUES (
-                    :id, :full_name, :email, :password_hash, :role, :phone, :is_active,
-                    :created_date, :approval_status, :approved_by, :approval_date, :registration_notes
-                )
-                ON CONFLICT (id) DO NOTHING;
-            """), user)
-
-# --- Combined init ---
-def init_database():
-    """
-    Run schema checks and seed default users.
-    Call this once at app startup.
-    """
-    ensure_schema()
-    seed_default_users()
-    st.info("✅ Database schema ensured and default users seeded.")
+    )
+    
+    # Verify we can connect
+    try:
+        with engine.connect() as conn:
+            conn.execute(text('SELECT 1'))
+        return engine
+    except Exception as e:
+        print(f"Database connection failed: {e}")
+        raise
 
 class DatabaseManager:
-    """Simple database manager class to match the app's expected interface"""
-    
     def __init__(self):
+        """Initialize the database manager"""
         self.engine = get_engine()
-    
+        self.Session = sessionmaker(bind=self.engine)
+        
     def get_session(self):
         """Get a new database session"""
-        session = get_session()
-        return session
-    
+        return self.Session()
+        
     def close_session(self, session):
-        """Properly close a session and return connection to pool"""
+        """Safely close a database session"""
         if session:
-            try:
-                session.close()
-                if hasattr(session, 'engine'):
-                    session.engine.dispose()
-            except Exception as e:
-                print(f"Error closing session: {e}")
-    
-    def is_available(self):
-        """Check if database connection is available"""
-        session = None
-        try:
-            session = self.get_session()
-            session.execute(text("SELECT 1"))
-            return True
-        except Exception as e:
-            print(f"Database availability check failed: {e}")
-            return False
-        finally:
-            if session:
-                self.close_session(session)
+            session.close()
 
-# Create a global db_manager instance
+    def init_db(self):
+        """Initialize the database tables"""
+        Base.metadata.create_all(self.engine)
+
+# Create a singleton instance
 db_manager = DatabaseManager()
