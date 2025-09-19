@@ -24,10 +24,12 @@ def get_engine():
     return create_engine(
         db_url.strip(),
         pool_pre_ping=True,
-        pool_recycle=1800,
-        pool_size=3,  # Reduced from default to stay within Supabase limits
+        pool_recycle=300,  # Recycle connections every 5 minutes
+        pool_size=2,  # Minimal pool size for Supabase
         max_overflow=0,  # No overflow connections
-        pool_timeout=30  # Wait up to 30 seconds for a connection
+        pool_timeout=10,  # Shorter timeout to fail fast
+        pool_use_lifo=True,  # Use last-in-first-out for better connection reuse
+        echo_pool=True  # Log pool events for debugging
     )
 
 def get_session():
@@ -39,9 +41,15 @@ def get_session():
             ...
         finally:
             session.close()
+            session.bind.dispose()  # Return connection to the pool immediately
     """
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
-    return SessionLocal()
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
+        session.bind.dispose()
 
 # --- Schema migration ---
 def ensure_schema():
