@@ -39,14 +39,11 @@ def get_engine():
         echo=False,
         future=True,
         poolclass=SingletonThreadPool,
-        pool_size=1,
-        max_overflow=0,
-        pool_timeout=30,
-        pool_recycle=1800,  # Recycle connection every 30 minutes
         connect_args={
             'connect_timeout': 30,
             'application_name': 'lumica_app',
-            'sslmode': 'require'
+            'sslmode': 'require',
+            'options': '-c idle_in_transaction_session_timeout=1800000'  # 30 minutes
         }
     )
     
