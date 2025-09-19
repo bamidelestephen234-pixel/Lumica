@@ -5225,6 +5225,11 @@ def verification_tab():
         key="report_id_input"
     )
 
+    # Normalize input: remove surrounding whitespace and uppercase to avoid
+    # false negatives in format validation (users may paste with spaces or wrong case)
+    if isinstance(report_id, str):
+        report_id = report_id.strip().upper()
+
     verification_key_input = st.text_input("Enter Verification Key:", key="verification_key_input")
 
     if st.button("🔍 Verify Report", key="verify_btn"):
