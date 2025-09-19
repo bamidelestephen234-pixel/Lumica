@@ -1,2 +1,36 @@
+# Dependencies
 node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+ENV/
+
+# Environment variables and secrets
 .env
+.streamlit/secrets.toml
+Streamlit Secrets
+*.secret
+*.key
+
+# Logs and databases
+*.log
+*.sqlite
+streamlit.log
+streamlit_bg.log
+streamlit_bg.pid
+.db_init_status
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
