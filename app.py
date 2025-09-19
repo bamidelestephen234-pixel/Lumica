@@ -5225,23 +5225,51 @@ def verification_tab():
         key="report_id_input"
     )
 
+    verification_key_input = st.text_input("Enter Verification Key:", key="verification_key_input")
+
     if st.button("🔍 Verify Report", key="verify_btn"):
-        if report_id:
-            if report_id.startswith("ASS-"):
-                # --- Verification Key Validation ---
-                from database.verification_keys import get_key
-                verification_key_input = st.text_input("Enter Verification Key:", key="verification_key_input")
+        if not report_id:
+            st.warning("⚠️ Please enter a Report ID")
+            return
+            
+        if not report_id.startswith("ASS-"):
+            st.error("❌ Invalid Report ID Format")
+            st.info("Report ID should start with 'ASS-' followed by numbers and letters")
+            st.markdown("Example: ASS-123456-ABCD")
+            return
+
+        if not verification_key_input:
+            st.warning("⚠️ Please enter a Verification Key")
+            return
+            
+        # --- Verification Key Validation ---
+        try:
+            from database.verification_keys import get_key
+            key_record = get_key(verification_key_input)
                 
-                if verification_key_input:  # Only validate if key is provided
-                    try:
-                        key_record = get_key(verification_key_input)
-                        
-                        if not key_record:
-                            st.error("❌ Invalid verification key. Please check and try again.")
-                        elif key_record['result_id'] != report_id:  # Check if the key matches this report
-                            st.error("❌ This verification key is not associated with this report.")
-                        else:
-                            st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")
+            if not key_record:
+                st.error("❌ Invalid verification key. Please check and try again.")
+                return
+                
+            if key_record['result_id'] != report_id:
+                st.error("❌ This verification key is not associated with this report.")
+                st.info(f"The provided key is for report: {key_record['result_id']}")
+                return
+                
+            st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")
+
+            # Show report details if available
+            try:
+                report_file = f"approved_reports/approved_{report_id}.json"
+                if os.path.exists(report_file):
+                    with open(report_file, 'r') as f:
+                        report_data = json.load(f)
+                        st.write("### Report Details:")
+                        st.write(f"**Student:** {report_data.get('student_name', 'N/A')}")
+                        st.write(f"**Class:** {report_data.get('student_class', 'N/A')}")
+                        st.write(f"**Term:** {report_data.get('term', 'N/A')}")
+                else:
+                    st.warning("⚠️ Report file not found. The report may have been archived.")
                     except Exception as e:
                         st.error(f"❌ Verification failed. Please try again in a moment. Error: {str(e)}")
 
