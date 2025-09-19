@@ -41,15 +41,12 @@ def get_session():
             ...
         finally:
             session.close()
-            session.bind.dispose()  # Return connection to the pool immediately
     """
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
+    engine = get_engine()
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     session = SessionLocal()
-    try:
-        yield session
-    finally:
-        session.close()
-        session.bind.dispose()
+    session.engine = engine  # Keep a reference to the engine
+    return session
 
 # --- Schema migration ---
 def ensure_schema():
@@ -148,17 +145,32 @@ class DatabaseManager:
     
     def get_session(self):
         """Get a new database session"""
-        return get_session()
+        session = get_session()
+        return session
+    
+    def close_session(self, session):
+        """Properly close a session and return connection to pool"""
+        if session:
+            try:
+                session.close()
+                if hasattr(session, 'engine'):
+                    session.engine.dispose()
+            except Exception as e:
+                print(f"Error closing session: {e}")
     
     def is_available(self):
         """Check if database connection is available"""
+        session = None
         try:
-            with self.engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-                return True
+            session = self.get_session()
+            session.execute(text("SELECT 1"))
+            return True
         except Exception as e:
             print(f"Database availability check failed: {e}")
             return False
+        finally:
+            if session:
+                self.close_session(session)
 
 # Create a global db_manager instance
 db_manager = DatabaseManager()
