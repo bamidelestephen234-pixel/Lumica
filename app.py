@@ -5231,9 +5231,15 @@ def verification_tab():
                 # --- Verification Key Validation ---
                 from database.verification_keys import get_key
                 verification_key_input = st.text_input("Enter Verification Key:", key="verification_key_input")
-                key_record = get_key(verification_key_input) if verification_key_input else None
-                if key_record and key_record[3] == report_id:
-                    st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")
+                
+                if verification_key_input:  # Only validate if key is provided
+                    key_record = get_key(verification_key_input)
+                    if not key_record:
+                        st.error("❌ Invalid verification key. Please check and try again.")
+                    elif key_record[3] != report_id:  # result_id in position 3
+                        st.error("❌ This verification key is not associated with this report.")
+                    else:
+                        st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")
 
                     # Locate report JSON in approved_reports or report_backup
                     report_found = False
