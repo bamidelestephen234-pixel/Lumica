@@ -5,8 +5,8 @@ import time
 from datetime import datetime
 import streamlit as st
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import NullPool
+from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.pool import SingletonThreadPool
 
 # Import your Base and password hashing from existing modules
 from database.models import Base
@@ -30,29 +30,23 @@ def get_engine():
             "under 'Manage app' -> 'Secrets'"
         )
 
-    # Strip any whitespace and parse the URL
+    # Strip any whitespace
     db_url = db_url.strip()
-    
-    # Add explicit statement_timeout and idle_in_transaction_session_timeout
-    if '?' in db_url:
-        db_url += '&statement_timeout=60000&idle_in_transaction_session_timeout=60000'
-    else:
-        db_url += '?statement_timeout=60000&idle_in_transaction_session_timeout=60000'
 
+    # Create engine with SingletonThreadPool to ensure single connection
     engine = create_engine(
         db_url,
-        echo=False,  # Disable SQL logging in production
+        echo=False,
         future=True,
-        poolclass=NullPool,  # Use NullPool to force new connections
+        poolclass=SingletonThreadPool,
+        pool_size=1,
+        max_overflow=0,
+        pool_timeout=30,
+        pool_recycle=1800,  # Recycle connection every 30 minutes
         connect_args={
-            'connect_timeout': 10,
+            'connect_timeout': 30,
             'application_name': 'lumica_app',
-            'keepalives': 1,
-            'keepalives_idle': 30,
-            'keepalives_interval': 10,
-            'keepalives_count': 3,
-            'sslmode': 'require',
-            'options': '-c statement_timeout=60000 -c idle_in_transaction_session_timeout=60000'
+            'sslmode': 'require'
         }
     )
     
@@ -81,39 +75,28 @@ def get_engine():
 class DatabaseManager:
     def __init__(self):
         """Initialize the database manager"""
-        self._engine = None
-        self._Session = None
-        self._last_connection_attempt = 0
-        self._connection_backoff = 1
-        self.connect()
+        self._engine = get_engine()
+        
+        # Create a scoped session factory
+        session_factory = sessionmaker(bind=self._engine)
+        self._Session = scoped_session(session_factory)
+        
+        # Verify connection
+        self.is_available()
 
     def connect(self):
-        """Establish database connection with backoff"""
-        current_time = time.time()
-        
-        # Enforce minimum time between connection attempts
-        if current_time - self._last_connection_attempt < self._connection_backoff:
-            time.sleep(self._connection_backoff)
-        
+        """Establish database connection"""
         try:
             self._engine = get_engine()
-            self._Session = sessionmaker(bind=self._engine)
             
-            # Test connection
-            with self._engine.connect() as conn:
-                conn.execute(text('SELECT 1'))
+            # Create new scoped session factory
+            session_factory = sessionmaker(bind=self._engine)
+            self._Session = scoped_session(session_factory)
             
-            # Success - reset backoff
-            self._connection_backoff = 1
-            return True
-            
+            return self.is_available()
         except Exception as e:
             print(f"Database connection failed: {e}")
-            # Increase backoff (max 32 seconds)
-            self._connection_backoff = min(self._connection_backoff * 2, 32)
             return False
-        finally:
-            self._last_connection_attempt = time.time()
 
     @property
     def engine(self):
@@ -130,34 +113,25 @@ class DatabaseManager:
         return self._Session
 
     def get_session(self):
-        """Get a new database session with automatic reconnection"""
+        """Get a session from the scoped session registry"""
         if not self.is_available():
             if not self.connect():
                 raise RuntimeError("Unable to establish database connection")
-        
-        try:
-            session = self.Session()
-            # Set session timeout
-            session.execute(text('SET statement_timeout = 60000'))
-            session.execute(text('SET idle_in_transaction_session_timeout = 60000'))
-            return session
-        except Exception as e:
-            print(f"Failed to create session: {e}")
-            self._engine = None  # Force reconnect on next attempt
-            raise
+        return self._Session()
 
     def close_session(self, session):
-        """Safely close a database session"""
+        """Remove session from the scoped session registry"""
         if session:
             try:
-                session.commit()  # Commit any pending changes
+                session.commit()
             except:
-                session.rollback()  # Rollback on error
+                session.rollback()
             finally:
                 try:
-                    session.close()
+                    # Remove it from the scoped session registry
+                    self._Session.remove()
                 except:
-                    pass  # Ignore errors on close
+                    pass
 
     def init_db(self):
         """Initialize the database tables with retry logic"""
