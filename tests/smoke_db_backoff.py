@@ -64,19 +64,49 @@ finally:
 if original_init is not None:
     app.init_sql_connection = original_init
 
-print("\nNow testing verification key persistence (SQLite)...")
-# Generate a random key and save it
+print("\nTesting verification key persistence in PostgreSQL...")
+import streamlit as st
+
+# Initialize database connection
+verification_keys.init_db()
+
+# Generate a test key and metadata
 test_key = str(uuid.uuid4())
 user_id = 'smoke_test_user'
 result_id = 'smoke_test_result'
-verification_keys.save_key(test_key, user_id, result_id)
 
-# Fetch it back
-fetched = verification_keys.get_key(test_key)
-exists = verification_keys.key_exists(test_key)
+# Test saving
+try:
+    verification_keys.save_key(test_key, user_id, result_id)
+    print("✅ Successfully saved verification key")
+except Exception as e:
+    print(f"❌ Failed to save verification key: {e}")
+    raise
 
-print("Saved key:", test_key)
-print("Fetched row:", fetched)
-print("Exists?:", exists)
+# Test retrieval
+try:
+    fetched = verification_keys.get_key(test_key)
+    print(f"✅ Successfully retrieved key: {fetched}")
+except Exception as e:
+    print(f"❌ Failed to retrieve key: {e}")
+    raise
 
-print("Smoke test complete.")
+# Test existence check
+try:
+    exists = verification_keys.key_exists(test_key)
+    print(f"✅ Key existence check successful: {exists}")
+except Exception as e:
+    print(f"❌ Failed to check key existence: {e}")
+    raise
+
+# Additional verification
+if fetched:
+    print("\nVerification key details:")
+    print(f"Key: {test_key}")
+    print(f"User ID: {user_id}")
+    print(f"Result ID: {result_id}")
+    print(f"Created at: {fetched[4] if len(fetched) > 4 else 'N/A'}")
+else:
+    print("❌ No data returned for verification key")
+
+print("\nSmoke test complete.")
