@@ -5235,13 +5235,10 @@ def verification_tab():
                 if verification_key_input:  # Only validate if key is provided
                     try:
                         key_record = get_key(verification_key_input)
-                        # Also try using the report ID as the key
-                        if not key_record:
-                            key_record = get_key(report_id)
-                            
+                        
                         if not key_record:
                             st.error("❌ Invalid verification key. Please check and try again.")
-                        elif key_record[3] != report_id and key_record[1] != verification_key_input:
+                        elif key_record[3] != report_id:  # Check if the key matches this report
                             st.error("❌ This verification key is not associated with this report.")
                         else:
                             st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")

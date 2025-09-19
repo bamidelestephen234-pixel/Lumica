@@ -35,19 +35,28 @@ def save_key(key: str, user_id: Optional[str], result_id: Optional[str]):
 def get_key(key: str):
     """Get a verification key from the database"""
     session = None
-    for attempt in range(3):  # Try up to 3 times
-        try:
-            session = db_manager.get_session()
-            result = session.execute(
-                text('SELECT * FROM verification_keys WHERE key = :key OR result_id = :key'),
-                {'key': key}
-            ).fetchone()
+    try:
+        session = db_manager.get_session()
+        # First try exact key match
+        result = session.execute(
+            text('SELECT * FROM verification_keys WHERE key = :key'),
+            {'key': key}
+        ).fetchone()
+        if result:
             return result
-        except Exception as e:
-            if "MaxClientsInSessionMode" in str(e):
-                time.sleep(1)  # Wait a bit before retrying
-                continue
-            raise
+            
+        # Then try report ID match
+        result = session.execute(
+            text('SELECT * FROM verification_keys WHERE result_id = :report_id'),
+            {'report_id': key}
+        ).fetchone()
+        return result
+    except Exception as e:
+        print(f"Error getting key: {e}")
+        raise
+    finally:
+        if session:
+            db_manager.close_session(session)
         finally:
             if session:
                 db_manager.close_session(session)
