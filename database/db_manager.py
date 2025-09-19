@@ -30,22 +30,29 @@ def get_engine():
             "under 'Manage app' -> 'Secrets'"
         )
 
+    # Strip any whitespace and parse the URL
+    db_url = db_url.strip()
+    
+    # Add explicit statement_timeout and idle_in_transaction_session_timeout
+    if '?' in db_url:
+        db_url += '&statement_timeout=60000&idle_in_transaction_session_timeout=60000'
+    else:
+        db_url += '?statement_timeout=60000&idle_in_transaction_session_timeout=60000'
+
     engine = create_engine(
-        db_url.strip(),
-        echo=True,  # Log SQL for debugging
+        db_url,
+        echo=False,  # Disable SQL logging in production
         future=True,
-        pool_pre_ping=True,
-        pool_size=1,
-        max_overflow=0,
-        pool_recycle=60,
+        poolclass=NullPool,  # Use NullPool to force new connections
         connect_args={
-            'connect_timeout': 60,
+            'connect_timeout': 10,
             'application_name': 'lumica_app',
             'keepalives': 1,
             'keepalives_idle': 30,
             'keepalives_interval': 10,
-            'keepalives_count': 5,
-            'sslmode': 'require'
+            'keepalives_count': 3,
+            'sslmode': 'require',
+            'options': '-c statement_timeout=60000 -c idle_in_transaction_session_timeout=60000'
         }
     )
     
@@ -76,30 +83,37 @@ class DatabaseManager:
         """Initialize the database manager"""
         self._engine = None
         self._Session = None
+        self._last_connection_attempt = 0
+        self._connection_backoff = 1
         self.connect()
 
     def connect(self):
-        """Establish database connection with retries"""
-        max_retries = 3
-        retry_delay = 2
-        last_error = None
-
-        for attempt in range(max_retries):
-            try:
-                self._engine = get_engine()
-                self._Session = sessionmaker(bind=self._engine)
-                # Test connection
-                with self._engine.connect() as conn:
-                    conn.execute(text('SELECT 1'))
-                return True
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
-                    continue
-        print(f"Failed to connect to database after {max_retries} attempts: {last_error}")
-        return False
+        """Establish database connection with backoff"""
+        current_time = time.time()
+        
+        # Enforce minimum time between connection attempts
+        if current_time - self._last_connection_attempt < self._connection_backoff:
+            time.sleep(self._connection_backoff)
+        
+        try:
+            self._engine = get_engine()
+            self._Session = sessionmaker(bind=self._engine)
+            
+            # Test connection
+            with self._engine.connect() as conn:
+                conn.execute(text('SELECT 1'))
+            
+            # Success - reset backoff
+            self._connection_backoff = 1
+            return True
+            
+        except Exception as e:
+            print(f"Database connection failed: {e}")
+            # Increase backoff (max 32 seconds)
+            self._connection_backoff = min(self._connection_backoff * 2, 32)
+            return False
+        finally:
+            self._last_connection_attempt = time.time()
 
     @property
     def engine(self):
@@ -118,16 +132,32 @@ class DatabaseManager:
     def get_session(self):
         """Get a new database session with automatic reconnection"""
         if not self.is_available():
-            self.connect()
-        return self.Session()
+            if not self.connect():
+                raise RuntimeError("Unable to establish database connection")
+        
+        try:
+            session = self.Session()
+            # Set session timeout
+            session.execute(text('SET statement_timeout = 60000'))
+            session.execute(text('SET idle_in_transaction_session_timeout = 60000'))
+            return session
+        except Exception as e:
+            print(f"Failed to create session: {e}")
+            self._engine = None  # Force reconnect on next attempt
+            raise
 
     def close_session(self, session):
         """Safely close a database session"""
         if session:
             try:
-                session.close()
-            except Exception:
-                pass
+                session.commit()  # Commit any pending changes
+            except:
+                session.rollback()  # Rollback on error
+            finally:
+                try:
+                    session.close()
+                except:
+                    pass  # Ignore errors on close
 
     def init_db(self):
         """Initialize the database tables with retry logic"""
