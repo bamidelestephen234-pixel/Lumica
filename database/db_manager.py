@@ -18,9 +18,16 @@ def get_engine():
     Create a restart-safe SQLAlchemy engine with connection recycling.
     Reads DATABASE_URL from Streamlit secrets or environment variables.
     """
-    db_url = st.secrets["DATABASE_URL"]
-    if not db_url:
-        raise RuntimeError("❌ DATABASE_URL not found in Streamlit secrets.")
+    try:
+        db_url = st.secrets["DATABASE_URL"]
+        if not db_url:
+            raise ValueError("Empty DATABASE_URL")
+    except KeyError:
+        raise RuntimeError(
+            "❌ DATABASE_URL not found in Streamlit secrets. "
+            "Please configure this in your Streamlit Cloud dashboard "
+            "under 'Manage app' -> 'Secrets'"
+        )
     return create_engine(
         db_url.strip(),
         pool_pre_ping=True,
