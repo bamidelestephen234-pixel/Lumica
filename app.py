@@ -28,7 +28,7 @@ def developer_console_ui():
                                 fw.write(traceback.format_exc() + "\n")
                             st.error(f"❌ Error approving user: {e}")
                 else:
-                    st.warning("⚠️ You do not have permission to approve users. Only the Principal or Developer can approve.")
+                    st.warning("⚠️ You do not have permission to approve users. Only the Principal, HOD, or Developer can approve.")
 
             # Reject button and handler
             with col3:
@@ -77,7 +77,7 @@ def developer_console_ui():
                                 fw.write(traceback.format_exc() + "\n")
                             st.error(f"❌ Error rejecting user: {e}")
                 else:
-                    st.info("⚠️ You do not have permission to reject users. Only the Principal or Developer can reject.")
+                    st.info("⚠️ You do not have permission to reject users. Only the Principal, HOD, or Developer can reject.")
     else:
         st.info("No pending teacher approvals.")
 
@@ -201,6 +201,7 @@ import hashlib
 import secrets
 import threading
 import time
+import random
 import csv
 import uuid
 import string
@@ -226,6 +227,13 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 
+# Simple cooldown to avoid hammering the remote DB when pool limits are hit
+DB_COOLDOWN_UNTIL = 0
+# Counters for admin diagnostics
+DB_QUERY_RETRY_COUNT = 0
+DB_EXECUTE_RETRY_COUNT = 0
+DB_COOLDOWN_COUNT = 0
+
 # Debug: Verify secrets are loaded (credentials redacted for security)
 secrets_available = list(st.secrets.keys()) if st.secrets else []
 print(f"DEBUG: st.secrets at startup: {len(secrets_available)} secret(s) loaded: {secrets_available}")
@@ -238,32 +246,76 @@ print(f"DEBUG: st.secrets at startup: {len(secrets_available)} secret(s) loaded:
 def init_sql_connection():
     """Initialize Streamlit SQLConnection with proper production settings"""
     try:
-        # Use st.connection for better Streamlit Cloud compatibility
+        # Prefer SQLAlchemy engine with connection pooling to reduce session churn
         db_url = st.secrets["DATABASE_URL"]
-        conn = st.connection("postgresql", type="sql", url=db_url)
-        return conn
+        try:
+            from sqlalchemy import create_engine
+            # Small pool by default - tune as needed
+            engine = create_engine(db_url, pool_size=5, max_overflow=2, pool_pre_ping=True)
+            print("✅ SQLAlchemy engine initialized for DB pooling")
+            return engine
+        except Exception as e_engine:
+            print(f"SQLAlchemy engine unavailable or failed: {e_engine}. Falling back to Streamlit connection.")
+            conn = st.connection("postgresql", type="sql", url=db_url)
+            return conn
     except Exception as e:
         print(f"Failed to initialize SQL connection: {e}")
         return None
 
 def get_healthy_sql_connection():
     """Get a healthy SQL connection with automatic stale connection detection"""
+    global DB_COOLDOWN_UNTIL
+    now_ts = time.time()
+    if DB_COOLDOWN_UNTIL and now_ts < DB_COOLDOWN_UNTIL:
+        print("⚠️ Database in cooldown, skipping immediate reconnect")
+        return None
+
     conn = init_sql_connection()
     if not conn:
         return None
 
     try:
         # Health check - try a simple query
-        conn.query("SELECT 1", ttl=0)  # No cache for health check
-        return conn
+        # If conn is a SQLAlchemy Engine, use a connection from the pool
+        try:
+            from sqlalchemy.engine import Engine
+        except Exception:
+            Engine = None
+
+        if Engine and isinstance(conn, Engine):
+            try:
+                from sqlalchemy import text as _text
+                with conn.connect() as c:
+                    c.execute(_text("SELECT 1"))
+                return conn
+            except Exception as e:
+                raise e
+        else:
+            # Assume Streamlit SQL connection
+            conn.query("SELECT 1", ttl=0)  # No cache for health check
+            return conn
     except Exception as e:
         print(f"Connection is stale, resetting: {e}")
+        # If the server reports too many clients or pool exhaustion, back off
+        msg = str(e).lower()
+        if 'max clients' in msg or 'maxclients' in msg or 'too many' in msg or 'pool_size' in msg:
+            # Set a short cooldown to avoid hammering the pool
+            DB_COOLDOWN_UNTIL = time.time() + 30
+            # increment diagnostic counter
+            try:
+                global DB_COOLDOWN_COUNT
+                DB_COOLDOWN_COUNT += 1
+            except Exception:
+                pass
+            print("⚠️ Detected DB pool exhaustion - enabling 30s cooldown before reconnect attempts")
         # Clear the cached connection and get a fresh one
         st.cache_resource.clear()
         return init_sql_connection()
 
 def query_with_retry(sql, params=None, retries=3, ttl=300):
     """Execute SQL query with automatic retry and connection recovery"""
+    backoff = 0.5
+    global DB_QUERY_RETRY_COUNT
     for attempt in range(retries):
         try:
             conn = get_healthy_sql_connection()
@@ -273,30 +325,71 @@ def query_with_retry(sql, params=None, retries=3, ttl=300):
             # Convert SQLAlchemy text() objects to strings for Streamlit caching compatibility
             sql_str = str(sql) if hasattr(sql, 'text') else sql
 
+            # If we returned a SQLAlchemy engine, use it
+            from sqlalchemy.engine import Engine
+            if isinstance(conn, Engine):
+                with conn.connect() as connection:
+                    result = connection.execute(text(sql_str), params or {})
+                    try:
+                        rows = result.fetchall()
+                        # Convert to DataFrame-like structure when possible
+                        import pandas as _pd
+                        if rows:
+                            df = _pd.DataFrame(rows)
+                        else:
+                            df = _pd.DataFrame()
+                        return df
+                    except Exception:
+                        return None
+
+            # Otherwise assume it's a Streamlit SQL connection
             if params:
                 return conn.query(sql_str, params=params, ttl=ttl)
             else:
                 return conn.query(sql_str, ttl=ttl)
 
         except Exception as e:
+            # If it's the final attempt, re-raise after logging
             if attempt == retries - 1:
                 print(f"Final database query attempt failed: {e}")
                 raise e
 
-            print(f"Database query attempt {attempt + 1} failed: {e}, retrying...")
-            # Clear cache and retry
-            st.cache_resource.clear()
-            time.sleep(1)
+            # Exponential backoff with jitter
+            sleep_for = backoff + (random.random() * 0.1)
+            print(f"Database query attempt {attempt + 1} failed: {e}, retrying in {sleep_for:.2f}s...")
+            time.sleep(sleep_for)
+            backoff *= 2
+            # Clear any cached connection to force re-init
+            try:
+                st.cache_resource.clear()
+            except Exception:
+                pass
+            try:
+                DB_QUERY_RETRY_COUNT += 1
+            except Exception:
+                pass
 
 def execute_sql_with_retry(sql, params=None, retries=3):
     """Execute SQL command (INSERT/UPDATE/DELETE) with retry logic"""
+    backoff = 0.5
+    global DB_EXECUTE_RETRY_COUNT
     for attempt in range(retries):
         try:
             conn = get_healthy_sql_connection()
             if not conn:
                 raise Exception("No database connection available")
 
-            # For execute operations, we need to use the underlying connection
+            from sqlalchemy.engine import Engine
+            # If conn is an Engine, use a connection from the pool
+            if isinstance(conn, Engine):
+                with conn.begin() as connection:
+                    if params:
+                        connection.execute(text(str(sql)), params)
+                    else:
+                        connection.execute(text(str(sql)))
+                    return True
+
+            # Otherwise assume it's a Streamlit SQL connection
             if hasattr(conn, 'session'):
                 with conn.session as session:
                     if params:
@@ -308,23 +401,58 @@ def execute_sql_with_retry(sql, params=None, retries=3):
             else:
                 # Fallback approach - try direct execution
                 try:
-                    result = conn.query(sql, ttl=0)  # No cache for execute commands
+                    result = conn.query(str(sql), ttl=0)  # No cache for execute commands
                     return True
                 except Exception as e:
-                    # Don't silently ignore failures - log the error and let retry logic handle it
                     print(f"Direct execution failed: {e}")
-                    raise e  # Re-raise to trigger retry logic
+                    raise e
 
         except Exception as e:
             if attempt == retries - 1:
                 print(f"Final database execute attempt failed: {e}")
                 return False
 
-            print(f"Database execute attempt {attempt + 1} failed: {e}, retrying...")
-            st.cache_resource.clear()
-            time.sleep(1)
+            sleep_for = backoff + (random.random() * 0.1)
+            print(f"Database execute attempt {attempt + 1} failed: {e}, retrying in {sleep_for:.2f}s...")
+            time.sleep(sleep_for)
+            backoff *= 2
+            try:
+                st.cache_resource.clear()
+            except Exception:
+                pass
+            try:
+                DB_EXECUTE_RETRY_COUNT += 1
+            except Exception:
+                pass
 
     return False
+
+
+def show_db_status_banner():
+    """Show a small DB status banner in the UI for admins."""
+    try:
+        conn = get_healthy_sql_connection()
+        if conn is None:
+            st.warning("⚠️ Database: Unavailable (using fallback). Some features may be limited.")
+            return
+
+        # If conn is SQLAlchemy Engine, try a quick SELECT 1
+        from sqlalchemy.engine import Engine
+        if isinstance(conn, Engine):
+            try:
+                with conn.connect() as c:
+                    c.execute(text("SELECT 1"))
+                st.success("✅ Database: Connected")
+            except Exception:
+                st.error("❌ Database: Connection error")
+        else:
+            try:
+                conn.query("SELECT 1", ttl=0)
+                st.success("✅ Database: Connected")
+            except Exception:
+                st.error("❌ Database: Connection error")
+    except Exception:
+        pass
 
 # ============================================================================
 # FALLBACK TO OLD SYSTEM (FOR COMPATIBILITY)
@@ -756,6 +884,11 @@ def save_user_database(users_db):
                     'approval_date': approval_date,
                     'registration_notes': data.get("registration_notes")
                 }
+                # Execute the INSERT into the database
+                try:
+                    execute_sql_with_retry(insert_sql, params)
+                except Exception as e:
+                    print(f"❌ Failed to execute INSERT for user {user_id}: {e}")
 
         print(f"✅ Saved {len(users_db)} users using new SQL connection")
         return True
@@ -796,6 +929,61 @@ def get_pending_teacher_approvals():
     except Exception as e:
         print(f"Error fetching pending teacher approvals: {e}")
         return None
+
+
+def approvals_tab():
+    """Dedicated Approvals tab for Principals and Heads of Department to approve teachers."""
+    st.subheader("📋 Approvals")
+    st.info("Approve or reject new teacher registrations. Only Principals, HODs, and Developers can act here.")
+
+    actor_id = st.session_state.get('teacher_id')
+    # Ensure the current user has rights to approve
+    if not can_approve(actor_id):
+        st.warning("You do not have permission to view approvals.")
+        return
+
+    pending = get_pending_teacher_approvals()
+    if pending is None or pending.empty:
+        st.info("No pending approvals at the moment.")
+        return
+
+    for _, teacher in pending.iterrows():
+        col1, col2, col3 = st.columns([3, 2, 2])
+        with col1:
+            st.write(f"**{teacher['full_name']}** ({teacher['email']}) - {teacher['role']}")
+        with col2:
+            if st.button(f"✅ Approve {teacher['id']}", key=f"approvals_approve_{teacher['id']}"):
+                try:
+                    approver = actor_id
+                    # Use centralized helper to enable user and set approval
+                    ok = set_user_active_status(teacher['id'], active=True, actor_id=approver)
+                    if ok:
+                        st.success(f"Approved {teacher['full_name']}")
+                        st.rerun()
+                    else:
+                        st.error("Error approving user. Check logs.")
+                except Exception as e:
+                    st.error(f"Error approving user: {e}")
+        with col3:
+            if st.button(f"🗑️ Reject {teacher['id']}", key=f"approvals_reject_{teacher['id']}"):
+                approver = actor_id
+                # Mark as rejected via SQL or fallback
+                try:
+                    if 'db_manager' in globals() and db_manager is not None:
+                        sess = db_manager.get_session()
+                        try:
+                            sess.execute(text("UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id"), {"user_id": teacher['id'], "dev_id": approver, "now": datetime.now()})
+                            sess.commit()
+                        finally:
+                            sess.close()
+                    else:
+                        update_sql = text("UPDATE users SET approval_status = 'rejected', approved_by = :dev_id, approval_date = :now WHERE id = :user_id")
+                        execute_sql_with_retry(update_sql, {"user_id": teacher['id'], "dev_id": approver, "now": datetime.now()})
+
+                    st.success(f"Rejected {teacher['full_name']}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error rejecting user: {e}")
 
 def check_user_permissions(user_id, required_permission):
     """Check if user has required permission"""
@@ -4530,7 +4718,6 @@ def report_generator_tab():
                     "completed_subjects": completed_subjects,
                     "auto_save": False
                 }
-
                 if save_draft_report(draft_data):
                     st.success("✅ Draft saved successfully!")
                 else:
@@ -4698,6 +4885,28 @@ def report_generator_tab():
                 "html_content": html,
                 "report_details": report_details
             }
+
+            # --- Verification Key Generation & Persistence (restart-safe) ---
+            try:
+                import secrets
+                from database.verification_keys import save_key, key_exists
+
+                def generate_unique_key():
+                    # keep looping until we find a unique key (very unlikely to loop more than once)
+                    while True:
+                        k = secrets.token_urlsafe(16)
+                        if not key_exists(k):
+                            return k
+
+                verification_key = generate_unique_key()
+                save_key(verification_key, st.session_state.teacher_id, report_id)
+                report_data["verification_key"] = verification_key
+            except Exception as e:
+                # If persistent storage fails, still attach an in-memory key (less ideal)
+                import secrets as _secrets
+                report_data["verification_key"] = _secrets.token_urlsafe(16)
+                print(f"Warning: could not persist verification key: {e}")
+            # --- End verification persistence ---
 
             # Automatically approve the report
             success, message = auto_approve_report(report_data)
@@ -5019,47 +5228,21 @@ def verification_tab():
     if st.button("🔍 Verify Report", key="verify_btn"):
         if report_id:
             if report_id.startswith("ASS-"):
-                # Check if report exists in approved reports
-                report_found = False
-                report_data = None
+                # --- Verification Key Validation ---
+                from database.verification_keys import get_key
+                verification_key_input = st.text_input("Enter Verification Key:", key="verification_key_input")
+                key_record = get_key(verification_key_input) if verification_key_input else None
+                if key_record and key_record[3] == report_id:
+                    st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")
 
-                approved_dir = "approved_reports"
-                if os.path.exists(approved_dir):
-                    # First, let's list all available reports for debugging
-                    available_reports = []
-                    for filename in os.listdir(approved_dir):
-                        if filename.endswith('.json'):
-                            filepath = os.path.join(approved_dir, filename)
-                            try:
-                                with open(filepath, 'r') as f:
-                                    report = json.load(f)
-                                    available_reports.append(report.get('report_id', 'Unknown'))
-                                    if report.get('report_id') == report_id:
-                                        report_found = True
-                                        report_data = report
-                                        break
-                            except Exception as e:
-                                st.error(f"Error reading report file {filename}: {str(e)}")
-                                continue
-
-                    # Debug information for admin users
-                    if check_user_permissions(st.session_state.get('teacher_id', ''), "system_config"):
-                        with st.expander("🔍 Debug Information (Admin Only)", expanded=False):
-                            st.write(f"**Searching for Report ID:** {report_id}")
-                            st.write(f"**Available Reports ({len(available_reports)}):**")
-                            for available_id in available_reports:
-                                if available_id == report_id:
-                                    st.success(f"✅ {available_id} (MATCH FOUND)")
-                                else:
-                                    st.write(f"• {available_id}")
-
-                # Also check backup location for extra reliability
-                if not report_found:
-                    backup_dir = "report_backup"
-                    if os.path.exists(backup_dir):
-                        for filename in os.listdir(backup_dir):
+                    # Locate report JSON in approved_reports or report_backup
+                    report_found = False
+                    report_data = None
+                    approved_dir = "approved_reports"
+                    if os.path.exists(approved_dir):
+                        for filename in os.listdir(approved_dir):
                             if filename.endswith('.json'):
-                                filepath = os.path.join(backup_dir, filename)
+                                filepath = os.path.join(approved_dir, filename)
                                 try:
                                     with open(filepath, 'r') as f:
                                         report = json.load(f)
@@ -5070,132 +5253,72 @@ def verification_tab():
                                 except Exception:
                                     continue
 
-                if report_found and report_data:
-                    st.success("✅ **Report Verified Successfully!**")
+                    if not report_found:
+                        backup_dir = "report_backup"
+                        if os.path.exists(backup_dir):
+                            for filename in os.listdir(backup_dir):
+                                if filename.endswith('.json'):
+                                    filepath = os.path.join(backup_dir, filename)
+                                    try:
+                                        with open(filepath, 'r') as f:
+                                            report = json.load(f)
+                                            if report.get('report_id') == report_id:
+                                                report_found = True
+                                                report_data = report
+                                                break
+                                    except Exception:
+                                        continue
 
-                    # Check if report is persistent (survives restarts)
-                    is_persistent = report_data.get('persistent', False)
-                    restart_safe = "✅ Restart-Safe" if is_persistent else "⚠️ Session-Only"
+                    # If found, render details (student, scores, auth info) and allow PDF download
+                    if report_found and report_data:
+                        # Reuse the same UI from previous implementation (compact)
+                        st.markdown("### 📋 Verified Report Details")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("#### 👤 Student Information")
+                            st.write(f"**Student Name:** {report_data.get('student_name', 'N/A')}")
+                            st.write(f"**Class/Form:** {report_data.get('student_class', 'N/A')}")
+                            st.write(f"**Academic Term:** {report_data.get('term', 'N/A')}")
+                            st.markdown("#### 📊 Academic Performance")
+                            avg_score = report_data.get('average_cumulative', 0)
+                            final_grade = report_data.get('final_grade', 'N/A')
+                            st.write(f"**Average Score:** {avg_score:.2f}%")
+                            st.write(f"**Final Grade:** {final_grade}")
+                        with col2:
+                            st.markdown("#### 🔐 Authentication Details")
+                            st.write(f"**Report ID:** {report_data.get('report_id', 'N/A')}")
+                            st.write(f"**Generated By:** {report_data.get('teacher_id', 'N/A')}")
+                            created_date = report_data.get('created_date', 'N/A')
+                            approved_date = report_data.get('approved_date', 'N/A')
+                            approved_by = report_data.get('approved_by', 'N/A')
+                            if created_date != 'N/A':
+                                try:
+                                    formatted_created = datetime.fromisoformat(created_date).strftime('%B %d, %Y at %I:%M %p')
+                                    st.write(f"**Created Date:** {formatted_created}")
+                                except:
+                                    st.write(f"**Created Date:** {created_date}")
+                            if approved_date != 'N/A':
+                                try:
+                                    formatted_approved = datetime.fromisoformat(approved_date).strftime('%B %d, %Y at %I:%M %p')
+                                    st.write(f"**Approved Date:** {formatted_approved}")
+                                except:
+                                    st.write(f"**Approved Date:** {approved_date}")
+                            st.write(f"**Approved By:** {approved_by}")
 
-                    # Modern verification badge
-                    st.markdown(f"""
-                    <div style="
-                        background: rgba(255, 255, 255, 0.9);
-                        border: 2px solid #10b981;
-                        border-radius: 16px;
-                        padding: 24px;
-                        text-align: center;
-                        margin: 20px 0;
-                        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                        backdrop-filter: blur(10px);
-                    ">
-                        <div style="font-size: 48px; margin-bottom: 16px;">✅</div>
-                        <h3 style="color: #059669; margin: 8px 0; font-weight: 600;">VERIFIED AUTHENTIC</h3>
-                        <p style="color: #374151; margin: 4px 0; font-weight: 500;">Akin's Sunrise Secondary School</p>
-                        <p style="color: #6b7280; margin: 4px 0; font-size: 0.875rem;">Official Digital Report Card</p>
-                        <p style="color: #9ca3af; margin: 4px 0; font-size: 0.75rem;">Cryptographically Secured • {restart_safe}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    # Detailed report information
-                    st.markdown("### 📋 Verified Report Details")
-
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        st.markdown("#### 👤 Student Information")
-                        st.write(f"**Student Name:** {report_data.get('student_name', 'N/A')}")
-                        st.write(f"**Class/Form:** {report_data.get('student_class', 'N/A')}")
-                        st.write(f"**Academic Term:** {report_data.get('term', 'N/A')}")
-
-                        st.markdown("#### 📊 Academic Performance")
-                        avg_score = report_data.get('average_cumulative', 0)
-                        final_grade = report_data.get('final_grade', 'N/A')
-                        st.write(f"**Average Score:** {avg_score:.2f}%")
-                        st.write(f"**Final Grade:** {final_grade}")
-
-                        # Grade interpretation
-                        if final_grade == 'A':
-                            st.success("🌟 Excellent Performance")
-                        elif final_grade == 'B':
-                            st.info("👍 Good Performance")
-                        elif final_grade == 'C':
-                            st.warning("📈 Average Performance")
-                        else:
-                            st.error("📚 Needs Improvement")
-
-                    with col2:
-                        st.markdown("#### 🔐 Authentication Details")
-                        st.write(f"**Report ID:** {report_data.get('report_id', 'N/A')}")
-                        st.write(f"**Generated By:** {report_data.get('teacher_id', 'N/A')}")
-
-                        # Format dates
-                        created_date = report_data.get('created_date', 'N/A')
-                        approved_date = report_data.get('approved_date', 'N/A')
-                        approved_by = report_data.get('approved_by', 'N/A')
-
-                        if created_date != 'N/A':
-                            try:
-                                formatted_created = datetime.fromisoformat(created_date).strftime('%B %d, %Y at %I:%M %p')
-                                st.write(f"**Created Date:** {formatted_created}")
-                            except:
-                                st.write(f"**Created Date:** {created_date}")
-                        else:
-                            st.write(f"**Created Date:** {created_date}")
-
-                        if approved_date != 'N/A':
-                            try:
-                                formatted_approved = datetime.fromisoformat(approved_date).strftime('%B %d, %Y at %I:%M %p')
-                                st.write(f"**Approved Date:** {formatted_approved}")
-                            except:
-                                st.write(f"**Approved Date:** {approved_date}")
-                        else:
-                            st.write(f"**Approved Date:** {approved_date}")
-
-                        st.write(f"**Approved By:** {approved_by}")
-
-                        st.markdown("#### 🛡️ Security Status")
-                        st.success("✅ Digital Signature Valid")
-                        st.success("✅ Report Integrity Confirmed")
-                        st.success("✅ Official School Seal Verified")
-                        st.info("🔐 Blockchain Secured")
-
-
-
-                    # Download option for verified reports
-                    pdf_path = f"approved_reports/approved_{report_id}.pdf"
-                    if os.path.exists(pdf_path):
-                        with open(pdf_path, "rb") as f:
-                            st.download_button(
-                                "📄 Download Verified Report Card (PDF)",
-                                f,
-                                file_name=f"Verified_{report_data.get('student_name', 'Student')}_{report_data.get('term', 'Term')}.pdf",
-                                mime="application/pdf",
-                                width='stretch'
-                            )
-
+                        pdf_path = f"approved_reports/approved_{report_id}.pdf"
+                        if os.path.exists(pdf_path):
+                            with open(pdf_path, "rb") as f:
+                                st.download_button(
+                                    "📄 Download Verified Report Card (PDF)",
+                                    f,
+                                    file_name=f"Verified_{report_data.get('student_name', 'Student')}_{report_data.get('term', 'Term')}.pdf",
+                                    mime="application/pdf",
+                                    width='stretch'
+                                )
+                    else:
+                        st.info("✅ Verification key valid, but report file not found in storage. Contact admin to retrieve archived report.")
                 else:
-                    # Report ID format is correct but not found in database
-                    st.error("❌ Report Not Found")
-                    st.markdown(f"""
-                    <div style="text-align: center; padding: 15px; border: 3px solid #f44336; border-radius: 12px; background: linear-gradient(135deg, #ffebee, #ffffff); margin: 15px 0;">
-                        <span style="font-size: 48px; color: #f44336;">❌</span>
-                        <br><strong style="color: #d32f2f; font-size: 20px;">REPORT NOT FOUND</strong>
-                        <br><small style="color: #d32f2f; font-size: 14px;">Report ID: {report_id}</small>
-                        <br><small style="color: #f44336; font-size: 12px;">This report may not exist or has not been generated yet</small>
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    st.info("💡 **Possible reasons:**")
-                    st.write("• Report ID was entered incorrectly")
-                    st.write("• Report has not been generated yet")
-                    st.write("• Report may have been deleted or archived")
-                    st.write("• Contact the school for assistance")
-
-                    # Show available reports for reference (non-sensitive info only)
-                    if os.path.exists(approved_dir):
-                        report_count = len([f for f in os.listdir(approved_dir) if f.endswith('.json')])
-                        st.info(f"📊 **System Status:** {report_count} verified reports currently available in the system.")
+                    st.error("❌ Invalid or missing verification key for this report.")
             else:
                 st.error("❌ Invalid Report ID Format")
                 st.markdown(f"""
@@ -5579,6 +5702,13 @@ def admin_panel_tab():
             st.metric("Database", "✅ Connected")
         with col3:
             st.metric("Server Health", "✅ Good")
+        # DB diagnostics dashboard (lightweight)
+        try:
+            st.markdown("---")
+            st.write("### 🧾 Database Diagnostics")
+            db_admin_dashboard()
+        except Exception:
+            pass
 
     with admin_tab3:
         st.write("## 🔒 Security Settings")
@@ -5629,6 +5759,43 @@ def admin_panel_tab():
         # (User management UI removed from this audit-logs section; it lives in the Developer Console area)
         else:
             st.info("No users found in database.")
+
+        # small DB admin dashboard helper
+        def db_admin_dashboard():
+            try:
+                st.write("#### DB Retry / Cooldown Diagnostics")
+                col_a, col_b, col_c = st.columns(3)
+                try:
+                    col_a.metric("Query Retries", int(DB_QUERY_RETRY_COUNT))
+                except Exception:
+                    col_a.metric("Query Retries", "N/A")
+                try:
+                    col_b.metric("Execute Retries", int(DB_EXECUTE_RETRY_COUNT))
+                except Exception:
+                    col_b.metric("Execute Retries", "N/A")
+                try:
+                    col_c.metric("Cooldowns", int(DB_COOLDOWN_COUNT))
+                except Exception:
+                    col_c.metric("Cooldowns", "N/A")
+
+                if st.button("Reset DB Counters"):
+                    try:
+                        globals()['DB_QUERY_RETRY_COUNT'] = 0
+                        globals()['DB_EXECUTE_RETRY_COUNT'] = 0
+                        globals()['DB_COOLDOWN_COUNT'] = 0
+                        st.success("DB diagnostic counters reset")
+                    except Exception:
+                        st.error("Failed to reset counters")
+            except Exception as e:
+                st.error(f"DB dashboard error: {e}")
+
+        # expose helper to admin tabs (callable by other admin sections)
+        try:
+            # show compact diagnostics in the audit logs section footer
+            with st.expander("DB Diagnostics", expanded=False):
+                db_admin_dashboard()
+        except Exception:
+            pass
 
         # Student Management Section
         st.markdown("---")
@@ -7555,13 +7722,42 @@ def report_generator_page():
         if check_user_feature_access(st.session_state.teacher_id, "verification_system"):
             available_tabs.append(("🔍 Verify Reports", "verify"))
 
+        # Approvals tab - visible to users who can approve (Principal, HOD, Developer, or those with user_management permission)
+        try:
+            if can_approve(st.session_state.get('teacher_id')) or check_user_feature_access(st.session_state.teacher_id, 'admin_panel'):
+                available_tabs.append(("📋 Approvals", "approvals"))
+        except Exception:
+            pass
+
         # Admin Panel
         if check_user_feature_access(st.session_state.teacher_id, "admin_panel"):
             available_tabs.append(("⚙️ Admin Panel", "admin"))
 
-        # Developer Console  
-        if check_user_feature_access(st.session_state.teacher_id, "developer_console"):
+        # Developer Console - visible only to developers or users with explicit system_control permission
+        def can_view_developer_console(user_id=None):
+            try:
+                if user_id is None:
+                    user_id = st.session_state.get('teacher_id')
+                if not user_id:
+                    return False
+                users_db = load_user_database()
+                user = users_db.get(user_id, {})
+                role = user.get('role', '')
+                if role == 'developer':
+                    return True
+                # Allow explicit system_control permission (keeps compatibility if granted)
+                return check_user_permissions(user_id, 'system_control')
+            except Exception:
+                return False
+
+        if can_view_developer_console(st.session_state.get('teacher_id')):
             available_tabs.append(("🛠️ Developer Console", "developer"))
+
+        # Show DB status banner for admins/users
+        try:
+            show_db_status_banner()
+        except Exception:
+            pass
 
         # Create tabs
         tab_names = [tab[0] for tab in available_tabs]
@@ -7578,6 +7774,8 @@ def report_generator_page():
                     draft_reports_tab()
                 elif tab_key == "database":
                     student_database_tab()
+                elif tab_key == "approvals":
+                    approvals_tab()
                 elif tab_key == "analytics":
                     analytics_dashboard_tab()
                 elif tab_key == "verify":
@@ -7600,8 +7798,13 @@ def init_database_tables():
         # Create tables using execute operations (not query)
         tables_created = 0
 
-        # Get the underlying session for DDL operations
-        session = conn.session
+        # Determine how to execute DDL depending on connection type
+        try:
+            from sqlalchemy.engine import Engine
+        except Exception:
+            Engine = None
+
+        use_engine = Engine and isinstance(conn, Engine)
 
         # Users table
         try:
@@ -7622,13 +7825,22 @@ def init_database_tables():
                     registration_notes TEXT
                 )
             """)
-            session.execute(users_sql)
-            session.commit()
+            if use_engine:
+                with conn.begin() as connection:
+                    connection.execute(users_sql)
+            else:
+                session = conn.session
+                session.execute(users_sql)
+                session.commit()
             tables_created += 1
             print("✅ Users table ready")
         except Exception as e:
             print(f"⚠️ Users table creation issue: {e}")
-            session.rollback()
+            try:
+                if not use_engine:
+                    session.rollback()
+            except Exception:
+                pass
 
         # Activation keys table
         try:
@@ -7643,8 +7855,12 @@ def init_database_tables():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            session.execute(keys_sql)
-            session.commit()
+            if use_engine:
+                with conn.begin() as connection:
+                    connection.execute(keys_sql)
+            else:
+                session.execute(keys_sql)
+                session.commit()
             tables_created += 1
             print("✅ Activation keys table ready")
         except Exception as e:
@@ -7670,8 +7886,12 @@ def init_database_tables():
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            session.execute(students_sql)
-            session.commit()
+            if use_engine:
+                with conn.begin() as connection:
+                    connection.execute(students_sql)
+            else:
+                session.execute(students_sql)
+                session.commit()
             tables_created += 1
             print("✅ Students table ready")
         except Exception as e:
@@ -7681,12 +7901,16 @@ def init_database_tables():
         # Add missing authentication columns if they don't exist
         try:
             migration_sql = text("ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_attempts INTEGER DEFAULT 0")
-            session.execute(migration_sql)
-            session.commit()
-
             migration_sql2 = text("ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP")
-            session.execute(migration_sql2)
-            session.commit()
+            if use_engine:
+                with conn.begin() as connection:
+                    connection.execute(migration_sql)
+                    connection.execute(migration_sql2)
+            else:
+                session.execute(migration_sql)
+                session.commit()
+                session.execute(migration_sql2)
+                session.commit()
             print("✅ Authentication columns ensured")
         except Exception as e:
             print(f"⚠️ Authentication column migration issue: {e}")
@@ -7700,8 +7924,12 @@ def init_database_tables():
                 "CREATE INDEX IF NOT EXISTS idx_activationkeys_active ON activationkeys(is_active)",
                 "CREATE INDEX IF NOT EXISTS idx_students_class ON students(class_name)"
             ]:
-                session.execute(text(index_sql_str))
-                session.commit()
+                if use_engine:
+                    with conn.begin() as connection:
+                        connection.execute(text(index_sql_str))
+                else:
+                    session.execute(text(index_sql_str))
+                    session.commit()
             print("✅ Database indexes created")
         except Exception as e:
             print(f"⚠️ Index creation issue: {e}")
@@ -7740,23 +7968,37 @@ def seed_default_users():
                 ]
 
                 conn = get_healthy_sql_connection()
+                try:
+                    from sqlalchemy.engine import Engine
+                except Exception:
+                    Engine = None
+
+                use_engine = Engine and isinstance(conn, Engine)
+
                 for user in default_users:
                     password_hash = hash_password(user['password'])
                     try:
-                        session = conn.session
                         insert_sql = text("""
                             INSERT INTO users (id, full_name, email, password_hash, role, phone, is_active, approval_status)
                             VALUES (:id, :full_name, :email, :password_hash, :role, :phone, true, 'approved')
                         """)
-                        session.execute(insert_sql, {
+                        params = {
                             'id': user['id'],
                             'full_name': user['full_name'],
-                            'email': user['email'], 
+                            'email': user['email'],
                             'password_hash': password_hash,
                             'role': user['role'],
                             'phone': user['phone']
-                        })
-                        session.commit()
+                        }
+
+                        if use_engine:
+                            with conn.begin() as connection:
+                                connection.execute(insert_sql, params)
+                        else:
+                            session = conn.session
+                            session.execute(insert_sql, params)
+                            session.commit()
+
                         print(f"✅ Created default user: {user['email']}")
                     except Exception as e:
                         print(f"⚠️ Error creating user {user['email']}: {e}")
