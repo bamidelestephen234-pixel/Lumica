@@ -33,19 +33,37 @@ def get_engine():
     # Strip any whitespace
     db_url = db_url.strip()
 
+    # Validate the database URL format
+    if not db_url.startswith('postgresql://'):
+        raise ValueError("Invalid database URL format. Must start with 'postgresql://'")
+
     # Create engine with SingletonThreadPool to ensure single connection
-    engine = create_engine(
-        db_url,
-        echo=False,
-        future=True,
-        poolclass=SingletonThreadPool,
-        connect_args={
-            'connect_timeout': 30,
-            'application_name': 'lumica_app',
-            'sslmode': 'require',
-            'options': '-c idle_in_transaction_session_timeout=1800000'  # 30 minutes
-        }
-    )
+    try:
+        engine = create_engine(
+            db_url,
+            echo=False,
+            future=True,
+            poolclass=SingletonThreadPool,
+            connect_args={
+                'connect_timeout': 30,
+                'application_name': 'lumica_app',
+                'sslmode': 'require',
+                'options': '-c idle_in_transaction_session_timeout=1800000'  # 30 minutes
+            }
+        )
+        
+        # Test authentication immediately
+        with engine.connect() as conn:
+            conn.execute(text('SELECT 1')).fetchone()
+            
+        return engine
+    except Exception as e:
+        if '401' in str(e) or 'authentication failed' in str(e).lower():
+            raise RuntimeError(
+                "❌ Database authentication failed. Please check your database credentials. "
+                "This usually means the DATABASE_URL in your secrets is invalid or expired."
+            ) from e
+        raise
     
     # Verify we can connect with retries
     max_retries = 3
