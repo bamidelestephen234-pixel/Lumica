@@ -31,10 +31,11 @@ def get_engine():
     return create_engine(
         db_url.strip(),
         pool_pre_ping=True,
-        pool_recycle=300,  # Recycle connections every 5 minutes
-        pool_size=2,  # Minimal pool size for Supabase
+        pool_recycle=60,  # Recycle connections every minute
+        pool_size=1,  # Absolute minimum pool size for Supabase
         max_overflow=0,  # No overflow connections
-        pool_timeout=10,  # Shorter timeout to fail fast
+        pool_timeout=5,  # Shorter timeout to fail fast
+        pool_use_lifo=True  # Use last-in-first-out for better connection reuse
         pool_use_lifo=True,  # Use last-in-first-out for better connection reuse
         echo_pool=True  # Log pool events for debugging
     )
