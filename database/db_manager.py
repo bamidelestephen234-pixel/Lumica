@@ -21,7 +21,14 @@ def get_engine():
     db_url = st.secrets["DATABASE_URL"]
     if not db_url:
         raise RuntimeError("❌ DATABASE_URL not found in Streamlit secrets.")
-    return create_engine(db_url.strip(), pool_pre_ping=True, pool_recycle=1800)
+    return create_engine(
+        db_url.strip(),
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        pool_size=3,  # Reduced from default to stay within Supabase limits
+        max_overflow=0,  # No overflow connections
+        pool_timeout=30  # Wait up to 30 seconds for a connection
+    )
 
 def get_session():
     """

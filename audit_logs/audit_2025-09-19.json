@@ -1,0 +1,47 @@
+[
+  {
+    "timestamp": "2025-09-19T08:20:31.087267",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-19T08:20:31.086391",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "d59e0db7d5900da6",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-19T08:27:41.548483",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-19T08:27:41.547578",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "f11df5eceafb5f58",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-09-19T08:36:07.241508",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-09-19T08:36:07.241107",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "dbe90c1a26ad681d",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  }
+]

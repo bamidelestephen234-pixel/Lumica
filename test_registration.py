@@ -20,7 +20,8 @@ except Exception as e:
     print(f"FAIL: Could not read DATABASE_URL from st.secrets: {e}")
     sys.exit(1)
 
-engine = create_engine(db_url.strip(), pool_pre_ping=True, pool_recycle=1800)
+from database.db_manager import get_engine
+engine = get_engine()
 
 # Generate unique test user
 teacher_id = f"test_teacher_{uuid.uuid4().hex[:8]}"

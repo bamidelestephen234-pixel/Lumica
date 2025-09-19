@@ -1,0 +1,38 @@
+[
+  {
+    "timestamp": "2025-09-19T08:35:19.981028",
+    "teacher_id": "developer_001",
+    "activity": "logout",
+    "details": {
+      "logout_time": "2025-09-19T08:35:19.981005"
+    }
+  },
+  {
+    "timestamp": "2025-09-19T08:35:47.541826",
+    "teacher_id": "Shool_ict",
+    "activity": "failed_login",
+    "details": {
+      "attempted_user_input": "Shool_ict",
+      "timestamp": "2025-09-19T08:35:47.541796",
+      "reason": "user_not_found"
+    }
+  },
+  {
+    "timestamp": "2025-09-19T08:36:50.556481",
+    "teacher_id": "developer_001",
+    "activity": "logout",
+    "details": {
+      "logout_time": "2025-09-19T08:36:50.556454"
+    }
+  },
+  {
+    "timestamp": "2025-09-19T08:37:20.857444",
+    "teacher_id": "school_ict",
+    "activity": "login",
+    "details": {
+      "login_time": "2025-09-19T08:37:20.857412",
+      "ip_address": "replit_session",
+      "user_role": "principal"
+    }
+  }
+]
