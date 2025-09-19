@@ -5238,7 +5238,7 @@ def verification_tab():
                         
                         if not key_record:
                             st.error("❌ Invalid verification key. Please check and try again.")
-                        elif key_record[3] != report_id:  # Check if the key matches this report
+                        elif key_record['result_id'] != report_id:  # Check if the key matches this report
                             st.error("❌ This verification key is not associated with this report.")
                         else:
                             st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")

@@ -42,12 +42,36 @@ def get_key(key: str):
             text('SELECT * FROM verification_keys WHERE key = :key'),
             {'key': key}
         ).fetchone()
+        
         if result:
-            return result
+            return dict(
+                id=result[0],
+                key=result[1],
+                user_id=result[2],
+                result_id=result[3],
+                created_at=result[4]
+            )
             
         # Then try report ID match
         result = session.execute(
-            text('SELECT * FROM verification_keys WHERE result_id = :report_id'),
+            text('SELECT * FROM verification_keys WHERE result_id = :key'),
+            {'key': key}
+        ).fetchone()
+        
+        if result:
+            return dict(
+                id=result[0],
+                key=result[1],
+                user_id=result[2],
+                result_id=result[3],
+                created_at=result[4]
+            )
+        return None
+    except Exception as e:
+        raise Exception(f"Database error while verifying key: {str(e)}")
+    finally:
+        if session:
+            db_manager.close_session(session)
             {'report_id': key}
         ).fetchone()
         return result
