@@ -32,14 +32,20 @@ def get_engine():
 
     engine = create_engine(
         db_url.strip(),
-        poolclass=NullPool,  # Disable connection pooling to avoid Supabase limits
+        echo=True,  # Log SQL for debugging
+        future=True,
+        pool_pre_ping=True,
+        pool_size=1,
+        max_overflow=0,
+        pool_recycle=60,
         connect_args={
-            'connect_timeout': 30,  # Increase timeout for slower connections
-            'keepalives': 1,  # Enable TCP keepalive
-            'keepalives_idle': 30,  # Time between keepalive pings when idle
-            'keepalives_interval': 10,  # Time between keepalive retries
-            'keepalives_count': 5,  # Number of keepalive retries
-            'application_name': 'lumica_app'  # Identify our app in database logs
+            'connect_timeout': 60,
+            'application_name': 'lumica_app',
+            'keepalives': 1,
+            'keepalives_idle': 30,
+            'keepalives_interval': 10,
+            'keepalives_count': 5,
+            'sslmode': 'require'
         }
     )
     
