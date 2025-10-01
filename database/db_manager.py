@@ -176,5 +176,9 @@ class DatabaseManager:
         except Exception:
             return False
 
-# Create a singleton instance
-db_manager = DatabaseManager()
+# Create a singleton instance with error handling
+try:
+    db_manager = DatabaseManager()
+except Exception as e:
+    print(f"Warning: Could not initialize DatabaseManager: {e}")
+    db_manager = None
