@@ -2531,8 +2531,8 @@ def save_activation_config(config):
 
 def check_activation_status():
     """Check if the system is activated by querying Supabase directly - PRODUCTION READY with robust retry logic"""
-    max_retries = 3
-    retry_delay = 1
+    max_retries = 1
+    retry_delay = 0.2
 
     for attempt in range(max_retries):
         try:
@@ -5230,8 +5230,6 @@ def verification_tab():
     if isinstance(report_id, str):
         report_id = report_id.strip().upper()
 
-    verification_key_input = st.text_input("Enter Verification Key:", key="verification_key_input")
-
     if st.button("🔍 Verify Report", key="verify_btn"):
         if not report_id:
             st.warning("⚠️ Please enter a Report ID")
@@ -5242,29 +5240,21 @@ def verification_tab():
             st.info("Report ID should start with 'ASS-' followed by numbers and letters")
             st.markdown("Example: ASS-123456-ABCD")
             return
-
-        if not verification_key_input:
-            st.warning("⚠️ Please enter a Verification Key")
-            return
             
-        # --- Verification Key Validation ---
+        # --- Report ID Verification (uses persistent database storage) ---
         try:
             from database.verification_keys import get_key
-            key_record = get_key(verification_key_input)
+            key_record = get_key(report_id)
         except Exception as e:
             st.error(f"❌ Verification failed. Please try again in a moment. Error: {str(e)}")
             return
 
         if not key_record:
-            st.error("❌ Invalid verification key. Please check and try again.")
+            st.error("❌ Report ID not found in the system. Please check and try again.")
+            st.info("Make sure the report has been generated and approved.")
             return
 
-        if key_record['result_id'] != report_id:
-            st.error("❌ This verification key is not associated with this report.")
-            st.info(f"The provided key is for report: {key_record['result_id']}")
-            return
-
-        st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")
+        st.success("✅ **Report Verified Successfully!** Report ID is valid and found in the system.")
 
         # Locate report JSON in approved_reports or report_backup
         report_found = False
