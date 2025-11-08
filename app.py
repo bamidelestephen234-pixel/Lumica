@@ -5230,8 +5230,6 @@ def verification_tab():
     if isinstance(report_id, str):
         report_id = report_id.strip().upper()
 
-    verification_key_input = st.text_input("Enter Verification Key:", key="verification_key_input")
-
     if st.button("🔍 Verify Report", key="verify_btn"):
         if not report_id:
             st.warning("⚠️ Please enter a Report ID")
@@ -5242,29 +5240,20 @@ def verification_tab():
             st.info("Report ID should start with 'ASS-' followed by numbers and letters")
             st.markdown("Example: ASS-123456-ABCD")
             return
-
-        if not verification_key_input:
-            st.warning("⚠️ Please enter a Verification Key")
-            return
             
-        # --- Verification Key Validation ---
+        # --- Report ID Validation ---
         try:
             from database.verification_keys import get_key
-            key_record = get_key(verification_key_input)
+            key_record = get_key(report_id)
         except Exception as e:
             st.error(f"❌ Verification failed. Please try again in a moment. Error: {str(e)}")
             return
 
         if not key_record:
-            st.error("❌ Invalid verification key. Please check and try again.")
+            st.error("❌ Report ID not found or not verified in the system. Please check the ID and try again.")
             return
 
-        if key_record['result_id'] != report_id:
-            st.error("❌ This verification key is not associated with this report.")
-            st.info(f"The provided key is for report: {key_record['result_id']}")
-            return
-
-        st.success("✅ **Report Verified Successfully!** Verification key is valid and matches the report.")
+        st.success("✅ **Report Verified Successfully!** This report is authentic and registered in the system.")
 
         # Locate report JSON in approved_reports or report_backup
         report_found = False
@@ -7896,7 +7885,11 @@ def init_database_tables():
             print("✅ Activation keys table ready")
         except Exception as e:
             print(f"⚠️ Activation keys table creation issue: {e}")
-            session.rollback()
+            try:
+                if not use_engine and 'session' in locals():
+                    session.rollback()
+            except Exception:
+                pass
 
         # Students table
         try:
@@ -7927,7 +7920,11 @@ def init_database_tables():
             print("✅ Students table ready")
         except Exception as e:
             print(f"⚠️ Students table creation issue: {e}")
-            session.rollback()
+            try:
+                if not use_engine and 'session' in locals():
+                    session.rollback()
+            except Exception:
+                pass
 
         # Add missing authentication columns if they don't exist
         try:
@@ -7945,7 +7942,11 @@ def init_database_tables():
             print("✅ Authentication columns ensured")
         except Exception as e:
             print(f"⚠️ Authentication column migration issue: {e}")
-            session.rollback()
+            try:
+                if not use_engine and 'session' in locals():
+                    session.rollback()
+            except Exception:
+                pass
 
         # Add indexes
         try:
@@ -7964,7 +7965,11 @@ def init_database_tables():
             print("✅ Database indexes created")
         except Exception as e:
             print(f"⚠️ Index creation issue: {e}")
-            session.rollback()
+            try:
+                if not use_engine and 'session' in locals():
+                    session.rollback()
+            except Exception:
+                pass
 
         print(f"✅ Database initialization complete - {tables_created} tables ready")
         return True
