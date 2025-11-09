@@ -1,3 +1,78 @@
+def _safe_rerun():
+    """Try to programmatically trigger a Streamlit rerun in a backwards-compatible way.
+
+    Preferred approach is to call `st.experimental_rerun()` when available. If that
+    attribute isn't present (different Streamlit versions), fall back to toggling a
+    query-parameter which also forces a rerun. If that fails, flip a session_state
+    boolean as a last-resort no-op that will often cause a rerun in interactive
+    contexts.
+    """
+    try:
+        import streamlit as _st
+        # Preferred: direct API (older/newer Streamlit versions may or may not have it)
+        if hasattr(_st, "experimental_rerun"):
+            try:
+                _st.experimental_rerun()
+                return
+            except Exception:
+                # If the API exists but errors, continue to fallback
+                pass
+
+        # Fallback: toggle a query parameter to force a rerun.
+        # Newer Streamlit versions expose `st.query_params` as a property that can be
+        # read and assigned (preferred). Older versions used experimental_get/set helpers.
+        try:
+            # Preferred modern API
+            if hasattr(_st, "query_params"):
+                params = dict(_st.query_params or {})
+                current = params.get("_r", ["0"])
+                try:
+                    counter = int(current[0]) + 1
+                except Exception:
+                    counter = 1
+                params["_r"] = [str(counter)]
+                _st.query_params = params
+                return
+
+            # Backwards-compatible older API
+            if hasattr(_st, "experimental_get_query_params") and hasattr(_st, "experimental_set_query_params"):
+                params = _st.experimental_get_query_params()
+                counter = int(params.get("_r", ["0"])[0]) + 1
+                _st.experimental_set_query_params(_r=str(counter))
+                return
+        except Exception:
+            pass
+
+        # Last resort: flip a session_state value
+        try:
+            _st.session_state["_rerun_toggle"] = not _st.session_state.get("_rerun_toggle", False)
+            return
+        except Exception:
+            # Can't force rerun; give up quietly
+            return
+    except Exception:
+        # If import fails for any reason, we cannot do a rerun here
+        return
+
+# Try to ensure calls to `st.rerun()` or `st.experimental_rerun()` in the codebase
+# will use our backwards-compatible helper when the running Streamlit version
+# doesn't provide those APIs. This avoids editing every call site.
+try:
+    import streamlit as _st_mod
+    if not hasattr(_st_mod, "rerun"):
+        _st_mod.rerun = _safe_rerun
+    if not hasattr(_st_mod, "experimental_rerun"):
+        _st_mod.experimental_rerun = _safe_rerun
+except Exception:
+    # If Streamlit isn't importable at module import time, skip monkeypatching.
+    pass
+
+# Optional DB client: import psycopg2 if available; keep gracefully None if not installed
+try:
+    import psycopg2
+except Exception:
+    psycopg2 = None
+
 def developer_console_ui():
     st.header("🛠️ Developer Console")
     st.markdown("## Pending Teacher Approvals")
@@ -1079,6 +1154,200 @@ def can_approve(actor_id=None):
     except Exception:
         return False
 
+
+# ----------------------
+# Optional DB (Supabase/Postgres) persistence helpers for drafts
+# ----------------------
+def _get_supabase_conn():
+    """Return a psycopg2 connection to the Supabase Postgres DB if configured.
+
+    Expects env var SUPABASE_DB_URL to contain a valid Postgres DSN
+    (e.g. postgres://user:pass@host:5432/dbname). Returns None if not
+    configured or connection fails.
+    """
+    try:
+        db_url = os.environ.get('SUPABASE_DB_URL') or os.environ.get('DATABASE_URL')
+        if not db_url:
+            return None
+        # Use sslmode=require for Supabase
+        conn = psycopg2.connect(db_url, sslmode='require')
+        return conn
+    except Exception:
+        return None
+
+
+def ensure_drafts_table():
+    """Create the drafts table in Postgres if it does not exist."""
+    conn = _get_supabase_conn()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS public.drafts (
+          id TEXT PRIMARY KEY,
+          teacher_id TEXT,
+          student_name TEXT,
+          student_class TEXT,
+          term TEXT,
+          academic_year TEXT,
+          folder TEXT,
+          report_id TEXT,
+          data JSONB NOT NULL,
+          last_modified TIMESTAMPTZ DEFAULT now(),
+          created_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS idx_drafts_teacher ON public.drafts (teacher_id);
+        CREATE INDEX IF NOT EXISTS idx_drafts_folder ON public.drafts (folder);
+        CREATE INDEX IF NOT EXISTS idx_drafts_report ON public.drafts (report_id);
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return True
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+
+def save_draft_db(report_data):
+    """Upsert a draft into the DB. Returns True on success, False otherwise."""
+    conn = _get_supabase_conn()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        # Ensure table exists
+        ensure_drafts_table()
+
+        draft_id = report_data.get('draft_id') or report_data.get('report_id') or generate_draft_id(
+            report_data.get('student_name',''), report_data.get('student_class',''), report_data.get('term',''), report_data.get('teacher_id','')
+        )
+
+        data_json = json.dumps(report_data)
+        last_modified = report_data.get('last_modified') or datetime.now().isoformat()
+
+        upsert_sql = """
+        INSERT INTO public.drafts (id, teacher_id, student_name, student_class, term, academic_year, folder, report_id, data, last_modified, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, now())
+        ON CONFLICT (id) DO UPDATE SET
+          teacher_id = EXCLUDED.teacher_id,
+          student_name = EXCLUDED.student_name,
+          student_class = EXCLUDED.student_class,
+          term = EXCLUDED.term,
+          academic_year = EXCLUDED.academic_year,
+          folder = EXCLUDED.folder,
+          report_id = EXCLUDED.report_id,
+          data = EXCLUDED.data,
+          last_modified = EXCLUDED.last_modified;
+        """
+
+        cur.execute(upsert_sql, (
+            draft_id,
+            report_data.get('teacher_id'),
+            report_data.get('student_name'),
+            report_data.get('student_class'),
+            report_data.get('term'),
+            report_data.get('academic_year'),
+            report_data.get('folder'),
+            report_data.get('report_id'),
+            data_json,
+            last_modified
+        ))
+        conn.commit()
+        cur.close()
+        conn.close()
+        create_audit_log("draft_db_saved", st.session_state.get('teacher_id', 'unknown'), {"draft_id": draft_id}, "draft_management")
+        return True
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+
+def get_drafts_db(teacher_id=None, folder=None):
+    """Return list of drafts from DB, optionally filtered."""
+    conn = _get_supabase_conn()
+    if not conn:
+        return None
+    try:
+        cur = conn.cursor()
+        sql = "SELECT data FROM public.drafts"
+        params = []
+        where = []
+        if teacher_id:
+            where.append("teacher_id = %s")
+            params.append(teacher_id)
+        if folder:
+            where.append("folder = %s")
+            params.append(folder)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY last_modified DESC"
+        cur.execute(sql, tuple(params))
+        rows = cur.fetchall()
+        drafts = []
+        for r in rows:
+            try:
+                drafts.append(r[0])
+            except Exception:
+                continue
+        cur.close()
+        conn.close()
+        return drafts
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
+
+
+def delete_draft_db(draft_id):
+    conn = _get_supabase_conn()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM public.drafts WHERE id = %s", (draft_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        create_audit_log("draft_db_deleted", st.session_state.get('teacher_id', 'unknown'), {"draft_id": draft_id}, "draft_management")
+        return True
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+
+def move_draft_to_folder_db(draft_id, folder_name):
+    conn = _get_supabase_conn()
+    if not conn:
+        return False
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE public.drafts SET folder = %s, last_modified = now() WHERE id = %s", (folder_name, draft_id))
+        conn.commit()
+        cur.close()
+        conn.close()
+        create_audit_log("draft_db_moved", st.session_state.get('teacher_id', 'unknown'), {"draft_id": draft_id, "folder": folder_name}, "draft_management")
+        return True
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+
 def is_user_locked(user_id):
     """Check if user account is locked"""
     try:
@@ -1949,8 +2218,13 @@ def save_draft_report(report_data):
     except Exception as e:
         return False
 
-def get_draft_reports(teacher_id=None):
-    """Get all draft reports, optionally filtered by teacher"""
+def get_draft_reports(teacher_id=None, folder=None):
+    """Get all draft reports, optionally filtered by teacher and/or folder.
+
+    Folder is a logical tag stored inside each draft JSON under the key 'folder'.
+    This keeps drafts in a single directory while allowing persistent folder
+    organization across restarts.
+    """
     try:
         draft_dir = "draft_reports"
         if not os.path.exists(draft_dir):
@@ -1966,6 +2240,10 @@ def get_draft_reports(teacher_id=None):
 
                         # Filter by teacher if specified
                         if teacher_id and draft_data.get('teacher_id') != teacher_id:
+                            continue
+
+                        # Filter by folder if specified (folder stored in draft JSON)
+                        if folder and draft_data.get('folder') != folder:
                             continue
 
                         draft_reports.append(draft_data)
@@ -1995,6 +2273,173 @@ def delete_draft_report(draft_id):
     except Exception:
         return False
 
+
+def _ensure_draft_folder_index():
+    """Ensure the folder index file exists and return its path."""
+    draft_dir = "draft_reports"
+    os.makedirs(draft_dir, exist_ok=True)
+    index_path = os.path.join(draft_dir, "folders.json")
+    if not os.path.exists(index_path):
+        try:
+            with open(index_path, 'w') as f:
+                json.dump([], f)
+        except Exception:
+            pass
+    return index_path
+
+
+def list_draft_folders():
+    """Return a list of folder names for drafts, merging explicit folders and any folder values in draft files."""
+    try:
+        draft_dir = "draft_reports"
+        if not os.path.exists(draft_dir):
+            return []
+
+        folders = set()
+        # Load explicit folders index
+        index_path = _ensure_draft_folder_index()
+        try:
+            with open(index_path, 'r') as f:
+                explicit = json.load(f)
+                for f_name in explicit:
+                    if f_name and isinstance(f_name, str):
+                        folders.add(f_name)
+        except Exception:
+            pass
+
+        # Scan draft files for folder metadata
+        for filename in os.listdir(draft_dir):
+            if filename.startswith('draft_') and filename.endswith('.json'):
+                try:
+                    with open(os.path.join(draft_dir, filename), 'r') as f:
+                        data = json.load(f)
+                        fval = data.get('folder')
+                        if fval and isinstance(fval, str):
+                            folders.add(fval)
+                except Exception:
+                    continue
+
+        # Normalize and return sorted list
+        return sorted([f for f in folders if f])
+    except Exception:
+        return []
+
+
+def create_draft_folder(folder_name):
+    """Create a persistent draft folder name (stored in folders.json). Returns True on success."""
+    try:
+        # Basic validation - prevent path traversal
+        if not folder_name or '/' in folder_name or '\\' in folder_name:
+            return False
+
+        index_path = _ensure_draft_folder_index()
+        try:
+            with open(index_path, 'r') as f:
+                current = json.load(f)
+        except Exception:
+            current = []
+
+        if folder_name in current:
+            return True
+
+        current.append(folder_name)
+        with open(index_path, 'w') as f:
+            json.dump(current, f, indent=2)
+
+        create_audit_log("draft_folder_created", st.session_state.get('teacher_id', 'unknown'), {
+            "folder": folder_name
+        }, "draft_management")
+        return True
+    except Exception:
+        return False
+
+
+def delete_draft_folder(folder_name, move_contents_to_root=True):
+    """Delete a draft folder entry and optionally move contained drafts to root.
+
+    This updates `draft_reports/folders.json` to remove the folder and, if
+    move_contents_to_root is True, clears the `folder` key in any draft JSON
+    files that referenced the folder (effectively moving them to root).
+    Returns True on success, False on error.
+    """
+    try:
+        # Basic validation - prevent path traversal
+        if not folder_name or '/' in folder_name or '\\' in folder_name:
+            return False
+
+        index_path = _ensure_draft_folder_index()
+        try:
+            with open(index_path, 'r') as f:
+                current = json.load(f)
+        except Exception:
+            current = []
+
+        if folder_name in current:
+            current = [f for f in current if f != folder_name]
+            with open(index_path, 'w') as f:
+                json.dump(current, f, indent=2)
+
+        if move_contents_to_root:
+            draft_dir = "draft_reports"
+            if os.path.exists(draft_dir):
+                for filename in os.listdir(draft_dir):
+                    if filename.startswith('draft_') and filename.endswith('.json'):
+                        filepath = os.path.join(draft_dir, filename)
+                        try:
+                            with open(filepath, 'r') as rf:
+                                data = json.load(rf)
+                            if data.get('folder') == folder_name:
+                                data.pop('folder', None)
+                                data['last_modified'] = datetime.now().isoformat()
+                                with open(filepath, 'w') as wf:
+                                    json.dump(data, wf, indent=2)
+                        except Exception:
+                            # Skip problematic files but continue
+                            continue
+
+        create_audit_log("draft_folder_deleted", st.session_state.get('teacher_id', 'unknown'), {
+            "folder": folder_name,
+            "moved_to_root": move_contents_to_root
+        }, "draft_management")
+        return True
+    except Exception:
+        return False
+
+
+def move_draft_to_folder(draft_id, folder_name):
+    """Move a draft to a folder by updating its metadata. Returns True on success."""
+    try:
+        if not draft_id or not folder_name:
+            return False
+
+        # Ensure folder exists (do not create implicitly)
+        folders = list_draft_folders()
+        if folder_name not in folders:
+            return False
+
+        draft_dir = "draft_reports"
+        filepath = os.path.join(draft_dir, f"draft_{draft_id}.json")
+        if not os.path.exists(filepath):
+            return False
+
+        with open(filepath, 'r') as f:
+            data = json.load(f)
+
+        data['folder'] = folder_name
+        data['last_modified'] = datetime.now().isoformat()
+
+        with open(filepath, 'w') as f:
+            json.dump(data, f, indent=2)
+
+        create_audit_log("draft_moved", st.session_state.get('teacher_id', 'unknown'), {
+            "draft_id": draft_id,
+            "folder": folder_name
+        }, "draft_management")
+
+        return True
+    except Exception:
+        return False
+
 def generate_draft_id(student_name="", student_class="", term="", teacher_id=""):
     """Generate consistent draft ID to prevent duplicates"""
     if student_name and student_class and term and teacher_id:
@@ -2011,11 +2456,24 @@ def generate_draft_id(student_name="", student_class="", term="", teacher_id="")
 
 def save_pending_report(report_data):
     try:
+        from database import verification_keys
+        
         pending_dir = "pending_reports"
         os.makedirs(pending_dir, exist_ok=True)
 
         filename = f"pending_{report_data['report_id']}.json"
         filepath = os.path.join(pending_dir, filename)
+        
+        # Save verification key when report is created
+        try:
+            verification_keys.init_db()  # Ensure table exists
+            verification_keys.save_key(
+                key=report_data['report_id'],
+                user_id=report_data.get('teacher_id'),
+                result_id=report_data['report_id']
+            )
+        except Exception as ve:
+            print(f"Warning: Failed to save verification key: {ve}")
 
         # Ensure data persistence by using flush and sync
         with open(filepath, 'w') as f:
@@ -2059,12 +2517,25 @@ def get_pending_reports():
 def auto_approve_report(report_data):
     """Automatically approve and save report without requiring admin approval"""
     try:
+        from database import verification_keys
+        
         approved_dir = "approved_reports"
         os.makedirs(approved_dir, exist_ok=True)
 
         report_data['status'] = 'approved'
         report_data['approved_date'] = datetime.now().isoformat()
         report_data['approved_by'] = 'auto_system'
+        
+        # Save verification key for the report
+        try:
+            verification_keys.init_db()  # Ensure table exists
+            verification_keys.save_key(
+                key=report_data['report_id'],  # Use report ID as the key
+                user_id=report_data.get('teacher_id'),
+                result_id=report_data['report_id']
+            )
+        except Exception as ve:
+            print(f"Warning: Failed to save verification key: {ve}")
 
         # Add persistence markers
         report_data['persistent'] = True
@@ -4413,22 +4884,62 @@ def draft_reports_tab():
     st.subheader("📝 Draft Reports - Unfinished Work")
     st.markdown("Access and continue working on incomplete reports saved as drafts.")
 
+    # Draft folders UI: persistent folders stored under draft_reports/
+    st.markdown("#### 📁 Draft Folders")
+    col_f1, col_f2, col_f3 = st.columns([3, 1, 1])
+    with col_f1:
+        # List existing folders (including "(root)" for drafts at top-level)
+        folders = list_draft_folders()
+        selected_folder = st.selectbox("Select Folder (or All)", ["All"] + folders, key="selected_draft_folder")
+    with col_f2:
+        new_folder = st.text_input("Create Folder", key="new_draft_folder_input", placeholder="e.g., SS1A")
+        if st.button("➕ Create", key="create_draft_folder_btn"):
+            if new_folder:
+                if create_draft_folder(new_folder):
+                    st.success(f"✅ Folder '{new_folder}' created")
+                    _safe_rerun()
+                else:
+                    st.error("❌ Error creating folder")
+
+    with col_f3:
+        # Delete folder controls
+        if folders:
+            folder_to_delete = st.selectbox("Delete Folder", ["(Select)"] + folders, key="delete_draft_folder_select")
+            confirm_delete = st.checkbox("I confirm deletion / move contents to root", key="confirm_delete_folder")
+            if st.button("🗑️ Delete Folder", key="delete_draft_folder_btn"):
+                if folder_to_delete and folder_to_delete != "(Select)":
+                    if not confirm_delete:
+                        st.error("Please check the confirmation box to proceed with deletion.")
+                    else:
+                        # Attempt to delete (move contained drafts to root)
+                        if delete_draft_folder(folder_to_delete, move_contents_to_root=True):
+                            st.success(f"✅ Folder '{folder_to_delete}' deleted and contents moved to root")
+                            _safe_rerun()
+                        else:
+                            st.error("❌ Unable to delete folder. Make sure it exists and you have permission.")
+                else:
+                    st.info("Select a folder to delete.")
+
     # Auto-save notification
     if st.session_state.get('auto_save_notification'):
         st.success("✅ Draft auto-saved successfully!")
         st.session_state.auto_save_notification = False
 
-    # Get drafts for current teacher or all (if admin)
+    # Get drafts for current teacher or all (if admin) and filter by folder
     is_admin = check_user_permissions(st.session_state.teacher_id, "system_config")
+
+    folder_filter = None
+    if st.session_state.get('selected_draft_folder') and st.session_state['selected_draft_folder'] != "All":
+        folder_filter = st.session_state['selected_draft_folder']
 
     if is_admin:
         view_option = st.selectbox("View Drafts", ["My Drafts Only", "All Drafts"], key="draft_view_option")
         if view_option == "My Drafts Only":
-            draft_reports = get_draft_reports(st.session_state.teacher_id)
+            draft_reports = get_draft_reports(st.session_state.teacher_id, folder=folder_filter)
         else:
-            draft_reports = get_draft_reports()
+            draft_reports = get_draft_reports(folder=folder_filter)
     else:
-        draft_reports = get_draft_reports(st.session_state.teacher_id)
+        draft_reports = get_draft_reports(st.session_state.teacher_id, folder=folder_filter)
 
     if draft_reports:
         st.write(f"**Found {len(draft_reports)} draft reports:**")
@@ -4475,6 +4986,18 @@ def draft_reports_tab():
                             st.rerun()
                         else:
                             st.error("❌ Error deleting draft")
+                # Folder move controls
+                with col3:
+                    available_folders = [f for f in list_draft_folders() if f != draft.get('folder')]
+                    if available_folders:
+                        move_to = st.selectbox("Move to Folder", ["(Keep current)"] + available_folders, key=f"move_select_{draft['draft_id']}")
+                        if move_to and move_to != "(Keep current)":
+                            if st.button("📂 Move", key=f"move_draft_{draft['draft_id']}"):
+                                if move_draft_to_folder(draft['draft_id'], move_to):
+                                    st.success(f"✅ Moved draft to {move_to}")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Error moving draft")
 
         # Bulk operations for admins
         if is_admin and len(draft_reports) > 1:
@@ -4869,6 +5392,23 @@ def report_generator_tab():
                     width='stretch'
                 )
 
+            # First generate and save verification key
+            try:
+                import secrets
+                from database import verification_keys
+                # Initialize verification table first
+                verification_keys.init_db()
+                
+                verification_key = str(uuid.uuid4())
+                try:
+                    verification_keys.save_key(verification_key, st.session_state.teacher_id, report_id)
+                except Exception as e:
+                    st.error(f"Warning: could not save verification key: {e}")
+
+            except Exception as e:
+                st.error(f"Error setting up verification: {e}")
+                verification_key = str(uuid.uuid4())  # Fallback to simple uuid
+
             report_data = {
                 "report_id": report_id,
                 "student_name": student_name,
@@ -4877,13 +5417,14 @@ def report_generator_tab():
                 "parent_email": parent_email,
                 "teacher_id": st.session_state.teacher_id,
                 "created_date": datetime.now().isoformat(),
-                "status": "pending_review",
+                "status": "pending_review", 
                 "scores_data": updated_scores_data,
                 "average_cumulative": float(average_cumulative),
                 "final_grade": final_grade,
                 "total_term_score": total_term_score,
                 "html_content": html,
-                "report_details": report_details
+                "report_details": report_details,
+                "verification_key": verification_key  # Add verification key to report data
             }
 
             # --- Verification Key Generation & Persistence (restart-safe) ---
@@ -5243,17 +5784,364 @@ def verification_tab():
             
         # --- Report ID Validation ---
         try:
-            from database.verification_keys import get_key
-            key_record = get_key(report_id)
+            from database import verification_keys
+            
+            # Initialize verification table first (in case it doesn't exist)
+            verification_keys.init_db()
+            
+            # Try to get verification record by report_id
+            key_record = verification_keys.get_key(report_id)
+            
+            if not key_record:
+                st.error("❌ Report ID not found or not verified in the system. Please check the ID and try again.")
+                return
+
+            # Get report details from approved_reports
+            report_data = None
+            approved_dir = "approved_reports"
+            if os.path.exists(approved_dir):
+                report_path = os.path.join(approved_dir, f"approved_{report_id}.json")
+                if os.path.exists(report_path):
+                    try:
+                        with open(report_path, 'r') as f:
+                            report_data = json.load(f)
+                    except Exception as e:
+                        print(f"Error reading report data: {e}")
+
+            # Log successful verification
+            log_teacher_activity("system", "report_verification", {
+                "report_id": report_id,
+                "verification_key": key_record.get('key', 'unknown'),
+                "verified_at": datetime.now().isoformat()
+            })
+
+            # Show verification success with concise standard message
+            st.success("✅ **Report Verified Successfully!** This report is authentic and registered in our system.")
+
+            verification_time = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+            # Build a concise standard verification statement with logo and principal signature area
+            student_name = report_data.get('student_name', 'Not available') if report_data else 'Not available'
+            student_class = report_data.get('student_class', 'Not available') if report_data else 'Not available'
+            term = report_data.get('term', 'Not available') if report_data else 'Not available'
+            academic_year = report_data.get('academic_year', '2025/2026') if report_data else '2025/2026'
+
+            # Load branding and logo
+            try:
+                branding = load_branding_config()
+            except Exception:
+                branding = {}
+            school_name = branding.get('school_name', 'Akins Sunrise Secondary School')
+            try:
+                logo_base64 = get_logo_base64() or ''
+            except Exception:
+                logo_base64 = ''
+
+            standard_html = f"""
+            <div style="max-width:820px; margin:18px auto; padding:22px; border:1px solid #e6edf3; border-radius:10px; background:#fff; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color:#102a43;">
+              <div style="text-align:center; margin-bottom:12px;">
+                {f'<img src="data:image/png;base64,{logo_base64}" style="max-height:90px; display:block; margin:0 auto;"/>' if logo_base64 else ''}
+                <div style="font-weight:700; margin-top:8px;">{school_name.upper()}</div>
+              </div>
+              <h3 style="text-align:center; margin-top:6px;">Official Verification Notice</h3>
+              <p style="font-size:15px; line-height:1.6; text-align:justify; margin:14px 0;">
+                This is to certify that the report card with Report ID <strong>{report_id}</strong> for <strong>{student_name}</strong> ({student_class}) for <strong>{term}</strong>, Academic Session <strong>{academic_year}</strong>, was issued by {school_name} and has been verified as authentic on <strong>{verification_time}</strong>.
+                            </p>
+                            <p style="font-size:14px; color:#334155; text-align:center; margin:18px 0 8px 0;"><em>For inquiries, contact the school at <strong>info@akinssunrise.edu.ng</strong> or call +234-816-084-4529.</em></p>
+
+                            <!-- Signature area: printable box for principal's signature -->
+                            <div style="display:flex; justify-content:flex-end; margin-top:28px; gap:20px; align-items:center;">
+                                <div style="text-align:center; width:260px;">
+                                    <!-- Simple rectangular signature box for printing -->
+                                    <div style="width:220px; height:80px; border:1px solid #000; margin:0 auto; border-radius:4px;"></div>
+                                    <div style="font-size:12px; margin-top:8px;">Signature of Principal</div>
+                                </div>
+                            </div>
+                        </div>
+                        """
+
+            try:
+                st.markdown(standard_html, unsafe_allow_html=True)
+            except Exception:
+                st.write("This report has been verified as authentic.")
+
+            # Stop further detailed HTML rendering; the concise message is the canonical output
+            return
+
+            # Print helper removed to avoid embedding UI controls in printable output
+
+            if report_data:
+                # Format the report creation date
+                try:
+                    created_date = datetime.fromisoformat(report_data.get('created_date', '')).strftime("%B %d, %Y at %I:%M %p")
+                except:
+                    created_date = report_data.get('created_date', 'Not available')
+
+                verification_html += f"""
+                <div class="verification-section">
+                    <div class="verification-row">
+                        <div class="verification-label">Student Name:</div>
+                        <div class="verification-value">{report_data.get('student_name', 'Not available')}</div>
+                    </div>
+                    <div class="verification-row">
+                        <div class="verification-label">Class:</div>
+                        <div class="verification-value">{report_data.get('student_class', 'Not available')}</div>
+                    </div>
+                    <div class="verification-row">
+                        <div class="verification-label">Term:</div>
+                        <div class="verification-value">{report_data.get('term', 'Not available')}</div>
+                    </div>
+                    <div class="verification-row">
+                        <div class="verification-label">Academic Year:</div>
+                        <div class="verification-value">2025/2026</div>
+                    </div>
+                    <div class="verification-row">
+                        <div class="verification-label">Report Generated By:</div>
+                        <div class="verification-value">{report_data.get('teacher_id', 'Not available')}</div>
+                    </div>
+                    <div class="verification-row">
+                        <div class="verification-label">Generation Date:</div>
+                        <div class="verification-value">{created_date}</div>
+                    </div>
+                    <div class="verification-row">
+                        <div class="verification-label">Report ID:</div>
+                        <div class="verification-value">{report_id}</div>
+                    </div>
+                </div>
+                """
+
+            verification_html += f"""
+                <div class="verification-section">
+                    <div class="verification-row">
+                        <div class="verification-label">Verification Status:</div>
+                        <div class="verification-value">Authentic <span class="authentic-badge">✓ VERIFIED</span></div>
+                    </div>
+                    <div class="verification-row">
+                        <div class="verification-label">Verified On:</div>
+                        <div class="verification-value">{verification_time}</div>
+                    </div>
+                    <div class="verification-row">
+                        <div class="verification-label">Verification Method:</div>
+                        <div class="verification-value">Digital Signature Verification</div>
+                    </div>
+                    <div class="verification-row">
+                        <div class="verification-label">Issuing Authority:</div>
+                        <div class="verification-value">Akins Sunrise Secondary School, Ondo</div>
+                    </div>
+                </div>
+                <div style="text-align: center;">
+                    <div class="verification-stamp">
+                        🔒 VERIFIED AND AUTHENTICATED
+                    </div>
+                </div>
+                <div class="verification-footer">
+                    <strong>OFFICIAL VERIFICATION NOTICE</strong><br><br>
+                    This document has been verified as an authentic report card issued by<br>
+                    Akins Sunrise Secondary School's digital verification system.<br><br>
+                    Document authenticity has been confirmed through our secure digital signature validation process.<br><br>
+                    <div class="verification-contact">
+                        For any inquiries, please contact the school administration:<br>
+                        📧 info@akinssunrise.edu.ng | ☎️ +234-XXX-XXX-XXXX<br>
+                        Akins Sunrise Secondary School, Ondo State, Nigeria
+                    </div>
+                </div>
+            </div>
+            """
+
+            # Build a letter-style printable document and override verification_html for print output
+            try:
+                student_name = report_data.get('student_name', 'Not available') if report_data else 'Not available'
+                student_class = report_data.get('student_class', 'Not available') if report_data else 'Not available'
+                term = report_data.get('term', 'Not available') if report_data else 'Not available'
+                academic_year = '2025/2026'
+                generated_by = report_data.get('teacher_id', 'Not available') if report_data else 'Not available'
+                try:
+                    created_date = datetime.fromisoformat(report_data.get('created_date', '')).strftime("%B %d, %Y at %I:%M %p")
+                except Exception:
+                    created_date = report_data.get('created_date', 'Not available') if report_data else 'Not available'
+
+                # Try to load logo
+                try:
+                    logo_base64 = get_logo_base64() or ''
+                except Exception:
+                    logo_base64 = ''
+
+                # Printable content: horizontal letter (landscape) layout, no print button
+                printable_content = f"""
+                    <div style="width:100%; margin:0; padding:0; position:relative; font-family: Georgia, 'Times New Roman', serif; color:#111;">
+                        {f'''
+                        <div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:0; display:flex; justify-content:center; align-items:center; opacity:0.06; pointer-events:none;">
+                            <img src="data:image/png;base64,{logo_base64}" style="width:60%; object-fit:contain;" />
+                        </div>
+                        ''' if logo_base64 else ''}
+
+                        <div class="letter-header" style="position:relative; z-index:1; display:flex; align-items:center; gap:18px; padding:12px 0;">
+                            {f'<img src="data:image/png;base64,{logo_base64}" style="height:90px; object-fit:contain;" />' if logo_base64 else ''}
+                            <div style="flex:1;">
+                                <div style="font-size:20px; font-weight:800;">AKINS SUNRISE SECONDARY SCHOOL, ONDO</div>
+                                <div style="font-size:12px; color:#444;">Sunrise Avenue, Upper Aayeyemi, Ondo City, Ondo State</div>
+                            </div>
+                            <div style="text-align:right; font-size:12px; color:#333;">{datetime.now().strftime('%B %d, %Y')}</div>
+                        </div>
+
+                        <div style="display:flex; gap:24px; margin-top:18px; position:relative; z-index:1;">
+                            <div style="flex:2; padding-right:12px;">
+                                <div style="font-size:18px; font-weight:700; margin-bottom:8px; text-transform:uppercase;">OFFICIAL VERIFICATION NOTICE</div>
+                                <div style="font-size:14px; margin-bottom:12px; font-weight:600; color:#1976D2;">🔒 VERIFIED AND AUTHENTICATED</div>
+                                <div style="font-size:13px; line-height:1.6; text-align:justify;">
+                                    <p style="margin:0 0 12px 0;">This document has been verified as an authentic report card issued by Akins Sunrise Secondary School's digital verification system.</p>
+                                    <p style="margin:0 0 12px 0;">Document authenticity has been confirmed through our secure digital signature validation process.</p>
+                                    <p style="margin:0 0 12px 0;">For any inquiries, please contact the school administration: <strong>info@akinssunrise.edu.ng</strong> | <strong>+2348160844529</strong></p>
+                                </div>
+
+                                <div style="margin-top:32px;">
+                                    <p style="margin:0 0 6px 0; font-weight:700;">Signature of Principal</p>
+                                    <div style="width:320px; border-bottom:1px solid #000; height:1px; margin-top:18px;"></div>
+                                </div>
+                            </div>
+
+                            <div style="flex:1; background:#f7f7f7; padding:14px; border-radius:6px;">
+                                <div style="font-size:13px; font-weight:700; margin-bottom:8px;">REPORT VERIFICATION DETAILS</div>
+                                <table style="width:100%; font-size:13px; border-collapse:collapse;">
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333; width:45%;">Student Name:</td><td style="padding:6px 0;">{student_name}</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Class:</td><td style="padding:6px 0;">{student_class}</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Term:</td><td style="padding:6px 0;">{term}</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Academic Year:</td><td style="padding:6px 0;">{academic_year}</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Report Generated By:</td><td style="padding:6px 0;">{generated_by}</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Generation Date:</td><td style="padding:6px 0;">{created_date}</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Report ID:</td><td style="padding:6px 0;">{report_id}</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Verification Status:</td><td style="padding:6px 0;">Authentic ✓ VERIFIED</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Verified On:</td><td style="padding:6px 0;">{verification_time}</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Verification Method:</td><td style="padding:6px 0;">Digital Signature Verification</td></tr>
+                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Issuing Authority:</td><td style="padding:6px 0;">Akins Sunrise Secondary School, Ondo</td></tr>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div style="margin-top:22px; position:relative; z-index:1; font-size:12px; color:#555; text-align:left;">
+                            Akins Sunrise Secondary School, Ondo State, Nigeria
+                        </div>
+                    </div>
+                """
+
+                # Full HTML shown in the app (includes a non-print button outside printable area)
+                letter_html_with_button = f"""
+                <style>
+                @page {{ size: A4 landscape; margin: 18mm; }}
+                body {{ font-family: Georgia, 'Times New Roman', serif; color: #111; line-height: 1.45; }}
+                .letter-container {{ width:100%; margin:0 auto; padding:12mm; background: white; position: relative; box-sizing:border-box; }}
+                .print-btn {{ background: #1976D2; color: white; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; }}
+                .no-print {{ display: inline-block; }}
+                @media print {{ .no-print {{ display:none; }} }}
+                </style>
+
+                <div class="letter-container">
+                    <div style="text-align:right;" class="no-print"><button class="print-btn" onclick="printVerification()">🖨️ Print</button></div>
+                    <div id="verification-root">
+                        {printable_content}
+                    </div>
+                </div>
+
+                <script>
+                function printVerification() {{ window.print(); }}
+                </script>
+                """
+
+                # HTML used for PDF/printing (no print button). Adds centered image watermark when logo available
+                # Load branding for colored design (falls back to defaults)
+                branding_config = load_branding_config()
+                primary_color = branding_config.get('primary_color', '#1976D2')
+                secondary_color = branding_config.get('secondary_color', '#42A5F5')
+                accent_color = branding_config.get('accent_color', '#1565C0')
+                watermark_opacity = branding_config.get('watermark_opacity', 0.08)
+
+                letter_html_printable = f"""
+                <style>
+                /* Force A4 landscape single-page sizing for printing */
+                @page {{ size: A4 landscape; margin: 18mm; }}
+                html, body {{ height: 210mm; -webkit-print-color-adjust: exact; color-adjust: exact; }}
+                body {{ font-family: Georgia, 'Times New Roman', serif; color: #111; line-height: 1.45; margin: 0; padding: 0; background: #fff; }}
+
+                /* A4 landscape container */
+                .letter-container {{
+                    position: relative;
+                    width: 297mm;
+                    height: 210mm;
+                    margin: 0;
+                    padding: 0;
+                    background: white;
+                    box-sizing: border-box;
+                    overflow: hidden;
+                }}
+
+                /* Watermark */
+                .watermark {{
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%) rotate(-18deg);
+                    opacity: %s;
+                    z-index: 0;
+                    width: 72%%;
+                    max-width: 900px;
+                    pointer-events: none;
+                    filter: grayscale(50%%) brightness(1.05);
+                }}
+                .watermark img {{ width: 100%%; height: auto; display: block; }}
+
+                /* Ensure printable content stacks above watermark */
+                .letter-container > * {{ position: relative; z-index: 1; }}
+
+                @media screen and (max-width: 900px) {{
+                    .letter-container {{ width: 100%%; height: auto; padding: 16px; }}
+                }}
+                </style>
+
+                <div class="letter-container">
+                    {f'<div class="watermark"><img src="data:image/png;base64,{logo_base64}"/></div>' if logo_base64 else ''}
+                    {printable_content}
+                </div>
+                """ % (watermark_opacity)
+
+                # Show the printable HTML (no print button) in the app
+                verification_html = letter_html_printable
+            except Exception:
+                # If anything fails, keep previous verification_html
+                pass
+
+            # Attempt to generate a printable PDF (if WeasyPrint is available)
+            pdf_bytes = None
+            try:
+                if PDF_AVAILABLE:
+                    try:
+                        source_html = locals().get('letter_html_printable', verification_html)
+                        pdf_bytes = HTML(string=source_html).write_pdf()
+                    except Exception:
+                        pdf_bytes = None
+            except Exception:
+                pdf_bytes = None
+
+            try:
+                # Use Streamlit HTML component to ensure full HTML + CSS is rendered
+                st.components.v1.html(verification_html, height=800, scrolling=True)
+            except Exception:
+                # Fallback to markdown with unsafe flag for older Streamlit versions
+                st.markdown(verification_html, unsafe_allow_html=True)
+
+            # Offer PDF download when available
+            try:
+                if pdf_bytes:
+                    st.download_button(
+                        label="📄 Download Verification (PDF)",
+                        data=pdf_bytes,
+                        file_name=f"Verification_{report_id}.pdf",
+                        mime="application/pdf",
+                    )
+            except Exception:
+                pass
+
         except Exception as e:
             st.error(f"❌ Verification failed. Please try again in a moment. Error: {str(e)}")
             return
-
-        if not key_record:
-            st.error("❌ Report ID not found or not verified in the system. Please check the ID and try again.")
-            return
-
-        st.success("✅ **Report Verified Successfully!** This report is authentic and registered in the system.")
 
         # Locate report JSON in approved_reports or report_backup
         report_found = False
