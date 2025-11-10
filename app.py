@@ -5848,14 +5848,7 @@ def verification_tab():
                             </p>
                             <p style="font-size:14px; color:#334155; text-align:center; margin:18px 0 8px 0;"><em>For inquiries, contact the school at <strong>info@akinssunrise.edu.ng</strong> or call +234-816-084-4529.</em></p>
 
-                            <!-- Signature area: printable box for principal's signature -->
-                            <div style="display:flex; justify-content:flex-end; margin-top:28px; gap:20px; align-items:center;">
-                                <div style="text-align:center; width:260px;">
-                                    <!-- Simple rectangular signature box for printing -->
-                                    <div style="width:220px; height:80px; border:1px solid #000; margin:0 auto; border-radius:4px;"></div>
-                                    <div style="font-size:12px; margin-top:8px;">Signature of Principal</div>
-                                </div>
-                            </div>
+                            <!-- Signature area removed by request -->
                         </div>
                         """
 
