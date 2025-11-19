@@ -2533,13 +2533,19 @@ def save_pending_report(report_data):
         filename = f"pending_{report_data['report_id']}.json"
         filepath = os.path.join(pending_dir, filename)
         
-        # Save verification key when report is created
+        # Save verification key when report is created with full report data
         try:
+            import json as json_module
             verification_keys.init_db()  # Ensure table exists
+            
+            # Create a copy of report data without the large HTML content to reduce DB size
+            report_data_for_db = {k: v for k, v in report_data.items() if k != 'html_content'}
+            
             verification_keys.save_key(
                 key=report_data['report_id'],
                 user_id=report_data.get('teacher_id'),
-                result_id=report_data['report_id']
+                result_id=report_data['report_id'],
+                report_data=json_module.dumps(report_data_for_db)
             )
         except Exception as ve:
             print(f"Warning: Failed to save verification key: {ve}")
@@ -2595,13 +2601,19 @@ def auto_approve_report(report_data):
         report_data['approved_date'] = datetime.now().isoformat()
         report_data['approved_by'] = 'auto_system'
         
-        # Save verification key for the report
+        # Save verification key for the report with full report data for persistence
         try:
+            import json as json_module
             verification_keys.init_db()  # Ensure table exists
+            
+            # Create a copy of report data without the large HTML content to reduce DB size
+            report_data_for_db = {k: v for k, v in report_data.items() if k != 'html_content'}
+            
             verification_keys.save_key(
                 key=report_data['report_id'],  # Use report ID as the key
                 user_id=report_data.get('teacher_id'),
-                result_id=report_data['report_id']
+                result_id=report_data['report_id'],
+                report_data=json_module.dumps(report_data_for_db)
             )
         except Exception as ve:
             print(f"Warning: Failed to save verification key: {ve}")
@@ -5865,26 +5877,38 @@ def verification_tab():
                 st.error("❌ Report ID not found or not verified in the system. Please check the ID and try again.")
                 return
 
-            # Get report details from approved_reports or backup directories
+            # Get report details - First try from database, then fall back to file directories
             report_data = None
-            search_directories = ["approved_reports", "report_backup", "report_archive", "verified_reports"]
             
-            for directory in search_directories:
-                if os.path.exists(directory):
-                    report_filename = f"approved_{report_id}.json" if directory == "approved_reports" else f"backup_{report_id}.json"
-                    report_path = os.path.join(directory, report_filename)
-                    if os.path.exists(report_path):
-                        try:
-                            with open(report_path, 'r') as f:
-                                report_data = json.load(f)
-                                print(f"Report data loaded from {directory}")
-                                break
-                        except Exception as e:
-                            print(f"Error reading report data from {directory}: {e}")
-                            continue
+            # Try loading from database first (persistent storage)
+            if key_record.get('report_data'):
+                try:
+                    import json as json_module
+                    report_data = json_module.loads(key_record['report_data'])
+                    print(f"Report data loaded from database (persistent storage)")
+                except Exception as e:
+                    print(f"Error parsing report data from database: {e}")
+            
+            # Fall back to file directories if not in database
+            if not report_data:
+                search_directories = ["approved_reports", "report_backup", "report_archive", "verified_reports"]
+                
+                for directory in search_directories:
+                    if os.path.exists(directory):
+                        report_filename = f"approved_{report_id}.json" if directory == "approved_reports" else f"backup_{report_id}.json"
+                        report_path = os.path.join(directory, report_filename)
+                        if os.path.exists(report_path):
+                            try:
+                                with open(report_path, 'r') as f:
+                                    report_data = json.load(f)
+                                    print(f"Report data loaded from {directory}")
+                                    break
+                            except Exception as e:
+                                print(f"Error reading report data from {directory}: {e}")
+                                continue
             
             if not report_data:
-                print(f"Warning: Report data not found in any directory for {report_id}")
+                print(f"Warning: Report data not found in database or any directory for {report_id}")
                 st.warning("⚠️ Report ID is valid, but detailed report data could not be loaded. The report may have been archived or removed. Contact the school administration for assistance.")
 
             # Log successful verification
