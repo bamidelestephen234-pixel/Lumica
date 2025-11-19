@@ -5844,17 +5844,27 @@ def verification_tab():
                 st.error("❌ Report ID not found or not verified in the system. Please check the ID and try again.")
                 return
 
-            # Get report details from approved_reports
+            # Get report details from approved_reports or backup directories
             report_data = None
-            approved_dir = "approved_reports"
-            if os.path.exists(approved_dir):
-                report_path = os.path.join(approved_dir, f"approved_{report_id}.json")
-                if os.path.exists(report_path):
-                    try:
-                        with open(report_path, 'r') as f:
-                            report_data = json.load(f)
-                    except Exception as e:
-                        print(f"Error reading report data: {e}")
+            search_directories = ["approved_reports", "report_backup", "report_archive", "verified_reports"]
+            
+            for directory in search_directories:
+                if os.path.exists(directory):
+                    report_filename = f"approved_{report_id}.json" if directory == "approved_reports" else f"backup_{report_id}.json"
+                    report_path = os.path.join(directory, report_filename)
+                    if os.path.exists(report_path):
+                        try:
+                            with open(report_path, 'r') as f:
+                                report_data = json.load(f)
+                                print(f"Report data loaded from {directory}")
+                                break
+                        except Exception as e:
+                            print(f"Error reading report data from {directory}: {e}")
+                            continue
+            
+            if not report_data:
+                print(f"Warning: Report data not found in any directory for {report_id}")
+                st.warning("⚠️ Report ID is valid, but detailed report data could not be loaded. The report may have been archived or removed. Contact the school administration for assistance.")
 
             # Log successful verification
             log_teacher_activity("system", "report_verification", {
@@ -5863,15 +5873,22 @@ def verification_tab():
                 "verified_at": datetime.now().isoformat()
             })
 
-            # Show verification success with concise standard message
+            # Show verification success message
             st.success("✅ **Report Verified Successfully!** This report is authentic and registered in our system.")
 
             verification_time = datetime.now().strftime("%B %d, %Y at %I:%M %p")
-            # Build a concise standard verification statement with logo and principal signature area
+            
+            # Extract report details with proper fallback
             student_name = report_data.get('student_name', 'Not available') if report_data else 'Not available'
             student_class = report_data.get('student_class', 'Not available') if report_data else 'Not available'
             term = report_data.get('term', 'Not available') if report_data else 'Not available'
             academic_year = report_data.get('academic_year', '2025/2026') if report_data else '2025/2026'
+            generated_by = report_data.get('teacher_id', 'Not available') if report_data else 'Not available'
+            
+            try:
+                created_date = datetime.fromisoformat(report_data.get('created_date', '')).strftime("%B %d, %Y at %I:%M %p") if report_data and report_data.get('created_date') else 'Not available'
+            except Exception:
+                created_date = 'Not available'
 
             # Load branding and logo
             try:
@@ -5879,275 +5896,137 @@ def verification_tab():
             except Exception:
                 branding = {}
             school_name = branding.get('school_name', 'Akins Sunrise Secondary School')
+            school_address = branding.get('school_address', 'Sunrise Avenue, Upper Aayeyemi, Ondo City, Ondo State')
+            school_email = branding.get('school_email', 'info@akinssunrise.edu.ng')
+            school_phone = branding.get('school_phone', '+234-816-084-4529')
+            
             try:
                 logo_base64 = get_logo_base64() or ''
             except Exception:
                 logo_base64 = ''
 
-            standard_html = f"""
-            <div style="max-width:820px; margin:18px auto; padding:22px; border:1px solid #e6edf3; border-radius:10px; background:#fff; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; color:#102a43;">
-              <div style="text-align:center; margin-bottom:12px;">
-                {f'<img src="data:image/png;base64,{logo_base64}" style="max-height:90px; display:block; margin:0 auto;"/>' if logo_base64 else ''}
-                <div style="font-weight:700; margin-top:8px;">{school_name.upper()}</div>
-              </div>
-              <h3 style="text-align:center; margin-top:6px;">Official Verification Notice</h3>
-              <p style="font-size:15px; line-height:1.6; text-align:justify; margin:14px 0;">
-                This is to certify that the report card with Report ID <strong>{report_id}</strong> for <strong>{student_name}</strong> ({student_class}) for <strong>{term}</strong>, Academic Session <strong>{academic_year}</strong>, was issued by {school_name} and has been verified as authentic on <strong>{verification_time}</strong>.
-                            </p>
-                            <p style="font-size:14px; color:#334155; text-align:center; margin:18px 0 8px 0;"><em>For inquiries, contact the school at <strong>info@akinssunrise.edu.ng</strong> or call +234-816-084-4529.</em></p>
-
-                            <!-- Signature area removed by request -->
-                        </div>
-                        """
-
+            # Build professional verification notice with watermark and signature space
             try:
-                st.markdown(standard_html, unsafe_allow_html=True)
-            except Exception:
-                st.write("This report has been verified as authentic.")
-
-            # Stop further detailed HTML rendering; the concise message is the canonical output
-            return
-
-            # Print helper removed to avoid embedding UI controls in printable output
-
-            if report_data:
-                # Format the report creation date
-                try:
-                    created_date = datetime.fromisoformat(report_data.get('created_date', '')).strftime("%B %d, %Y at %I:%M %p")
-                except:
-                    created_date = report_data.get('created_date', 'Not available')
-
-                verification_html += f"""
-                <div class="verification-section">
-                    <div class="verification-row">
-                        <div class="verification-label">Student Name:</div>
-                        <div class="verification-value">{report_data.get('student_name', 'Not available')}</div>
-                    </div>
-                    <div class="verification-row">
-                        <div class="verification-label">Class:</div>
-                        <div class="verification-value">{report_data.get('student_class', 'Not available')}</div>
-                    </div>
-                    <div class="verification-row">
-                        <div class="verification-label">Term:</div>
-                        <div class="verification-value">{report_data.get('term', 'Not available')}</div>
-                    </div>
-                    <div class="verification-row">
-                        <div class="verification-label">Academic Year:</div>
-                        <div class="verification-value">2025/2026</div>
-                    </div>
-                    <div class="verification-row">
-                        <div class="verification-label">Report Generated By:</div>
-                        <div class="verification-value">{report_data.get('teacher_id', 'Not available')}</div>
-                    </div>
-                    <div class="verification-row">
-                        <div class="verification-label">Generation Date:</div>
-                        <div class="verification-value">{created_date}</div>
-                    </div>
-                    <div class="verification-row">
-                        <div class="verification-label">Report ID:</div>
-                        <div class="verification-value">{report_id}</div>
-                    </div>
-                </div>
-                """
-
-            verification_html += f"""
-                <div class="verification-section">
-                    <div class="verification-row">
-                        <div class="verification-label">Verification Status:</div>
-                        <div class="verification-value">Authentic <span class="authentic-badge">✓ VERIFIED</span></div>
-                    </div>
-                    <div class="verification-row">
-                        <div class="verification-label">Verified On:</div>
-                        <div class="verification-value">{verification_time}</div>
-                    </div>
-                    <div class="verification-row">
-                        <div class="verification-label">Verification Method:</div>
-                        <div class="verification-value">Digital Signature Verification</div>
-                    </div>
-                    <div class="verification-row">
-                        <div class="verification-label">Issuing Authority:</div>
-                        <div class="verification-value">Akins Sunrise Secondary School, Ondo</div>
-                    </div>
-                </div>
-                <div style="text-align: center;">
-                    <div class="verification-stamp">
-                        🔒 VERIFIED AND AUTHENTICATED
-                    </div>
-                </div>
-                <div class="verification-footer">
-                    <strong>OFFICIAL VERIFICATION NOTICE</strong><br><br>
-                    This document has been verified as an authentic report card issued by<br>
-                    Akins Sunrise Secondary School's digital verification system.<br><br>
-                    Document authenticity has been confirmed through our secure digital signature validation process.<br><br>
-                    <div class="verification-contact">
-                        For any inquiries, please contact the school administration:<br>
-                        📧 info@akinssunrise.edu.ng | ☎️ +234-XXX-XXX-XXXX<br>
-                        Akins Sunrise Secondary School, Ondo State, Nigeria
-                    </div>
-                </div>
-            </div>
-            """
-
-            # Build a letter-style printable document and override verification_html for print output
-            try:
-                student_name = report_data.get('student_name', 'Not available') if report_data else 'Not available'
-                student_class = report_data.get('student_class', 'Not available') if report_data else 'Not available'
-                term = report_data.get('term', 'Not available') if report_data else 'Not available'
-                academic_year = '2025/2026'
-                generated_by = report_data.get('teacher_id', 'Not available') if report_data else 'Not available'
-                try:
-                    created_date = datetime.fromisoformat(report_data.get('created_date', '')).strftime("%B %d, %Y at %I:%M %p")
-                except Exception:
-                    created_date = report_data.get('created_date', 'Not available') if report_data else 'Not available'
-
-                # Try to load logo
-                try:
-                    logo_base64 = get_logo_base64() or ''
-                except Exception:
-                    logo_base64 = ''
-
-                # Printable content: horizontal letter (landscape) layout, no print button
+                # Build printable content with watermark and professional layout
                 printable_content = f"""
-                    <div style="width:100%; margin:0; padding:0; position:relative; font-family: Georgia, 'Times New Roman', serif; color:#111;">
+                    <div style="width:100%; margin:0; padding:18px; position:relative; font-family: Georgia, 'Times New Roman', serif; color:#111;">
                         {f'''
-                        <div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:0; display:flex; justify-content:center; align-items:center; opacity:0.06; pointer-events:none;">
+                        <div style="position:absolute; top:0; left:0; width:100%; height:100%; z-index:0; display:flex; justify-content:center; align-items:center; opacity:0.08; pointer-events:none;">
                             <img src="data:image/png;base64,{logo_base64}" style="width:60%; object-fit:contain;" />
                         </div>
                         ''' if logo_base64 else ''}
 
-                        <div class="letter-header" style="position:relative; z-index:1; display:flex; align-items:center; gap:18px; padding:12px 0;">
-                            {f'<img src="data:image/png;base64,{logo_base64}" style="height:90px; object-fit:contain;" />' if logo_base64 else ''}
+                        <div class="letter-header" style="position:relative; z-index:1; display:flex; align-items:center; gap:20px; padding:12px 0; border-bottom:2px solid #003087; margin-bottom:20px;">
+                            {f'<img src="data:image/png;base64,{logo_base64}" style="height:100px; object-fit:contain;" />' if logo_base64 else ''}
                             <div style="flex:1;">
-                                <div style="font-size:20px; font-weight:800;">AKINS SUNRISE SECONDARY SCHOOL, ONDO</div>
-                                <div style="font-size:12px; color:#444;">Sunrise Avenue, Upper Aayeyemi, Ondo City, Ondo State</div>
+                                <div style="font-size:22px; font-weight:800; color:#003087;">{school_name.upper()}</div>
+                                <div style="font-size:13px; color:#555; margin-top:4px;">{school_address}</div>
                             </div>
-                            <div style="text-align:right; font-size:12px; color:#333;">{datetime.now().strftime('%B %d, %Y')}</div>
+                            <div style="text-align:right; font-size:12px; color:#555;">
+                                <div>Date: {datetime.now().strftime('%B %d, %Y')}</div>
+                                <div style="margin-top:4px;">Report ID: {report_id}</div>
+                            </div>
                         </div>
 
-                        <div style="display:flex; gap:24px; margin-top:18px; position:relative; z-index:1;">
-                            <div style="flex:2; padding-right:12px;">
-                                <div style="font-size:18px; font-weight:700; margin-bottom:8px; text-transform:uppercase;">OFFICIAL VERIFICATION NOTICE</div>
-                                <div style="font-size:14px; margin-bottom:12px; font-weight:600; color:#1976D2;">🔒 VERIFIED AND AUTHENTICATED</div>
-                                <div style="font-size:13px; line-height:1.6; text-align:justify;">
-                                    <p style="margin:0 0 12px 0;">This document has been verified as an authentic report card issued by Akins Sunrise Secondary School's digital verification system.</p>
-                                    <p style="margin:0 0 12px 0;">Document authenticity has been confirmed through our secure digital signature validation process.</p>
-                                    <p style="margin:0 0 12px 0;">For any inquiries, please contact the school administration: <strong>info@akinssunrise.edu.ng</strong> | <strong>+2348160844529</strong></p>
+                        <div style="display:flex; gap:28px; margin-top:24px; position:relative; z-index:1;">
+                            <div style="flex:2.2; padding-right:16px;">
+                                <div style="font-size:20px; font-weight:700; margin-bottom:12px; color:#003087; text-transform:uppercase; border-bottom:2px solid #003087; padding-bottom:6px;">Official Verification Notice</div>
+                                
+                                <div style="font-size:14px; margin-bottom:16px; font-weight:600; color:#1976D2; background:#e3f2fd; padding:10px; border-radius:6px; text-align:center;">
+                                    🔒 VERIFIED AND AUTHENTICATED
+                                </div>
+                                
+                                <div style="font-size:14px; line-height:1.8; text-align:justify; margin:16px 0;">
+                                    <p style="margin:0 0 14px 0;">
+                                        This is to <strong>certify</strong> that the academic report card bearing the unique identification number <strong>{report_id}</strong> has been duly issued by <strong>{school_name}</strong> and verified through our secure digital authentication system on <strong>{verification_time}</strong>.
+                                    </p>
+                                    <p style="margin:0 0 14px 0;">
+                                        The document pertains to <strong>{student_name}</strong>, a student of <strong>{student_class}</strong>, for the <strong>{term}</strong> of the <strong>{academic_year}</strong> academic session.
+                                    </p>
+                                    <p style="margin:0 0 14px 0;">
+                                        The authenticity of this document has been confirmed through our cryptographically secure digital signature validation process. This verification confirms that the report card is an official record maintained by the school administration.
+                                    </p>
+                                    <p style="margin:0 0 14px 0; font-style:italic; font-size:13px; color:#555;">
+                                        For any inquiries, concerns, or verification of this notice, please contact the school administration at <strong>{school_email}</strong> or call <strong>{school_phone}</strong>.
+                                    </p>
                                 </div>
 
-                                <div style="margin-top:32px;">
-                                    <p style="margin:0 0 6px 0; font-weight:700;">Signature of Principal</p>
-                                    <div style="width:320px; border-bottom:1px solid #000; height:1px; margin-top:18px;"></div>
+                                <div style="margin-top:40px; margin-bottom:20px;">
+                                    <div style="font-size:13px; margin-bottom:6px; font-weight:600; color:#333;">
+                                        _____________________________
+                                    </div>
+                                    <div style="font-size:13px; font-weight:700; color:#003087;">Principal's Signature</div>
+                                    <div style="font-size:12px; color:#666; margin-top:4px;">{school_name}</div>
                                 </div>
                             </div>
 
-                            <div style="flex:1; background:#f7f7f7; padding:14px; border-radius:6px;">
-                                <div style="font-size:13px; font-weight:700; margin-bottom:8px;">REPORT VERIFICATION DETAILS</div>
+                            <div style="flex:1; background:#f9f9f9; padding:18px; border-radius:8px; border:1px solid #ddd;">
+                                <div style="font-size:14px; font-weight:700; margin-bottom:14px; color:#003087; text-align:center; border-bottom:2px solid #003087; padding-bottom:6px;">VERIFICATION DETAILS</div>
                                 <table style="width:100%; font-size:13px; border-collapse:collapse;">
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333; width:45%;">Student Name:</td><td style="padding:6px 0;">{student_name}</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Class:</td><td style="padding:6px 0;">{student_class}</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Term:</td><td style="padding:6px 0;">{term}</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Academic Year:</td><td style="padding:6px 0;">{academic_year}</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Report Generated By:</td><td style="padding:6px 0;">{generated_by}</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Generation Date:</td><td style="padding:6px 0;">{created_date}</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Report ID:</td><td style="padding:6px 0;">{report_id}</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Verification Status:</td><td style="padding:6px 0;">Authentic ✓ VERIFIED</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Verified On:</td><td style="padding:6px 0;">{verification_time}</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Verification Method:</td><td style="padding:6px 0;">Digital Signature Verification</td></tr>
-                                    <tr><td style="padding:6px 0; vertical-align:top; color:#333;">Issuing Authority:</td><td style="padding:6px 0;">Akins Sunrise Secondary School, Ondo</td></tr>
+                                    <tr><td style="padding:8px 0; vertical-align:top; color:#555; font-weight:600;">Student Name:</td></tr>
+                                    <tr><td style="padding:0 0 12px 0; font-weight:700; color:#111;">{student_name}</td></tr>
+                                    
+                                    <tr><td style="padding:8px 0; vertical-align:top; color:#555; font-weight:600;">Class:</td></tr>
+                                    <tr><td style="padding:0 0 12px 0; font-weight:700; color:#111;">{student_class}</td></tr>
+                                    
+                                    <tr><td style="padding:8px 0; vertical-align:top; color:#555; font-weight:600;">Term:</td></tr>
+                                    <tr><td style="padding:0 0 12px 0; font-weight:700; color:#111;">{term}</td></tr>
+                                    
+                                    <tr><td style="padding:8px 0; vertical-align:top; color:#555; font-weight:600;">Academic Year:</td></tr>
+                                    <tr><td style="padding:0 0 12px 0; font-weight:700; color:#111;">{academic_year}</td></tr>
+                                    
+                                    <tr><td style="padding:8px 0; vertical-align:top; color:#555; font-weight:600;">Report ID:</td></tr>
+                                    <tr><td style="padding:0 0 12px 0; font-weight:700; color:#111;">{report_id}</td></tr>
+                                    
+                                    <tr><td style="padding:8px 0; vertical-align:top; color:#555; font-weight:600;">Verification Status:</td></tr>
+                                    <tr><td style="padding:0 0 12px 0; font-weight:700; color:#0d7d0d;">✓ AUTHENTIC</td></tr>
+                                    
+                                    <tr><td style="padding:8px 0; vertical-align:top; color:#555; font-weight:600;">Verified On:</td></tr>
+                                    <tr><td style="padding:0 0 12px 0; font-weight:700; color:#111;">{verification_time}</td></tr>
+                                    
+                                    <tr><td style="padding:8px 0; vertical-align:top; color:#555; font-weight:600;">Verification Method:</td></tr>
+                                    <tr><td style="padding:0 0 12px 0; color:#111;">Digital Signature Verification</td></tr>
+                                    
+                                    <tr><td style="padding:8px 0; vertical-align:top; color:#555; font-weight:600;">Issuing Authority:</td></tr>
+                                    <tr><td style="padding:0 0 12px 0; color:#111;">{school_name}</td></tr>
                                 </table>
                             </div>
                         </div>
 
-                        <div style="margin-top:22px; position:relative; z-index:1; font-size:12px; color:#555; text-align:left;">
-                            Akins Sunrise Secondary School, Ondo State, Nigeria
+                        <div style="margin-top:24px; position:relative; z-index:1; font-size:11px; color:#777; text-align:center; padding-top:16px; border-top:1px solid #ddd;">
+                            <div><strong>{school_name}</strong> • {school_address}</div>
+                            <div style="margin-top:4px;">Email: {school_email} • Phone: {school_phone}</div>
                         </div>
                     </div>
                 """
 
-                # Full HTML shown in the app (includes a non-print button outside printable area)
-                letter_html_with_button = f"""
-                <style>
-                @page {{ size: A4 landscape; margin: 18mm; }}
-                body {{ font-family: Georgia, 'Times New Roman', serif; color: #111; line-height: 1.45; }}
-                .letter-container {{ width:100%; margin:0 auto; padding:12mm; background: white; position: relative; box-sizing:border-box; }}
-                .print-btn {{ background: #1976D2; color: white; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; }}
-                .no-print {{ display: inline-block; }}
-                @media print {{ .no-print {{ display:none; }} }}
-                </style>
-
-                <div class="letter-container">
-                    <div style="text-align:right;" class="no-print"><button class="print-btn" onclick="printVerification()">🖨️ Print</button></div>
-                    <div id="verification-root">
-                        {printable_content}
-                    </div>
-                </div>
-
-                <script>
-                function printVerification() {{ window.print(); }}
-                </script>
-                """
-
-                # HTML used for PDF/printing (no print button). Adds centered image watermark when logo available
-                # Load branding for colored design (falls back to defaults)
-                branding_config = load_branding_config()
-                primary_color = branding_config.get('primary_color', '#1976D2')
-                secondary_color = branding_config.get('secondary_color', '#42A5F5')
-                accent_color = branding_config.get('accent_color', '#1565C0')
-                watermark_opacity = branding_config.get('watermark_opacity', 0.08)
-
+                # Wrap in styled container with watermark
                 letter_html_printable = f"""
                 <style>
-                /* Force A4 landscape single-page sizing for printing */
-                @page {{ size: A4 landscape; margin: 18mm; }}
-                html, body {{ height: 210mm; -webkit-print-color-adjust: exact; color-adjust: exact; }}
-                body {{ font-family: Georgia, 'Times New Roman', serif; color: #111; line-height: 1.45; margin: 0; padding: 0; background: #fff; }}
-
-                /* A4 landscape container */
-                .letter-container {{
-                    position: relative;
-                    width: 297mm;
-                    height: 210mm;
-                    margin: 0;
-                    padding: 0;
-                    background: white;
-                    box-sizing: border-box;
-                    overflow: hidden;
-                }}
-
-                /* Watermark */
-                .watermark {{
-                    position: absolute;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%) rotate(-18deg);
-                    opacity: %s;
-                    z-index: 0;
-                    width: 72%%;
-                    max-width: 900px;
-                    pointer-events: none;
-                    filter: grayscale(50%%) brightness(1.05);
-                }}
-                .watermark img {{ width: 100%%; height: auto; display: block; }}
-
-                /* Ensure printable content stacks above watermark */
-                .letter-container > * {{ position: relative; z-index: 1; }}
-
-                @media screen and (max-width: 900px) {{
-                    .letter-container {{ width: 100%%; height: auto; padding: 16px; }}
+                @page {{ size: A4 landscape; margin: 15mm; }}
+                html, body {{ -webkit-print-color-adjust: exact; color-adjust: exact; }}
+                body {{ font-family: Georgia, 'Times New Roman', serif; color: #111; line-height: 1.5; margin: 0; padding: 0; background: #fff; }}
+                .letter-container {{ position: relative; max-width: 1200px; margin: 0 auto; background: white; }}
+                @media print {{ 
+                    .no-print {{ display:none !important; }} 
+                    body {{ print-color-adjust: exact; -webkit-print-color-adjust: exact; }}
                 }}
                 </style>
 
                 <div class="letter-container">
-                    {f'<div class="watermark"><img src="data:image/png;base64,{logo_base64}"/></div>' if logo_base64 else ''}
+                    <div style="text-align:right; padding:10px;" class="no-print">
+                        <button onclick="window.print()" style="background:#1976D2; color:white; border:none; padding:10px 20px; border-radius:6px; cursor:pointer; font-size:14px;">
+                            🖨️ Print Verification Notice
+                        </button>
+                    </div>
                     {printable_content}
                 </div>
-                """ % (watermark_opacity)
+                """
 
-                # Show the printable HTML (no print button) in the app
                 verification_html = letter_html_printable
-            except Exception:
-                # If anything fails, keep previous verification_html
-                pass
+            except Exception as e:
+                print(f"Error generating verification HTML: {e}")
+                verification_html = f"<div style='padding:20px;'>Verification successful for Report ID: {report_id}</div>"
 
             # Attempt to generate a printable PDF (if WeasyPrint is available)
             pdf_bytes = None
