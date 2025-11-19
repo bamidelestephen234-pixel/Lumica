@@ -14,27 +14,38 @@ def init_db():
                 key TEXT UNIQUE NOT NULL,
                 user_id TEXT,
                 result_id TEXT,
+                report_data TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         '''))
         session.commit()
+        
+        try:
+            session.execute(text('''
+                ALTER TABLE verification_keys 
+                ADD COLUMN IF NOT EXISTS report_data TEXT
+            '''))
+            session.commit()
+        except Exception:
+            pass
     finally:
         db_manager.close_session(session)
 
 
-def save_key(key: str, user_id: Optional[str], result_id: Optional[str]):
+def save_key(key: str, user_id: Optional[str], result_id: Optional[str], report_data: Optional[str] = None):
     """Save a verification key to the database. Uses ON CONFLICT to handle duplicates."""
     session = db_manager.get_session()
     try:
         session.execute(
             text('''
-                INSERT INTO verification_keys (key, user_id, result_id) 
-                VALUES (:key, :user_id, :result_id)
+                INSERT INTO verification_keys (key, user_id, result_id, report_data) 
+                VALUES (:key, :user_id, :result_id, :report_data)
                 ON CONFLICT (key) DO UPDATE SET 
                     user_id = EXCLUDED.user_id,
-                    result_id = EXCLUDED.result_id
+                    result_id = EXCLUDED.result_id,
+                    report_data = EXCLUDED.report_data
             '''),
-            {'key': key, 'user_id': user_id, 'result_id': result_id}
+            {'key': key, 'user_id': user_id, 'result_id': result_id, 'report_data': report_data}
         )
         session.commit()
     except Exception as e:
@@ -52,7 +63,7 @@ def get_key(key: str) -> Optional[dict]:
     try matching `result_id` against the provided value (useful when callers
     pass a report id).
     
-    Returns a dict with fields (id, key, user_id, result_id, created_at) or
+    Returns a dict with fields (id, key, user_id, result_id, report_data, created_at) or
     None if no row is found.
     """
     session = db_manager.get_session()
@@ -66,7 +77,7 @@ def get_key(key: str) -> Optional[dict]:
         
         # Try exact key match (case-insensitive)
         row = session.execute(
-            text("SELECT id, key, user_id, result_id, created_at FROM verification_keys WHERE UPPER(key) = :key"),
+            text("SELECT id, key, user_id, result_id, report_data, created_at FROM verification_keys WHERE UPPER(key) = :key"),
             {"key": search_val},
         ).fetchone()
 
@@ -76,13 +87,14 @@ def get_key(key: str) -> Optional[dict]:
                 "key": row[1],
                 "user_id": row[2],
                 "result_id": row[3],
-                "created_at": row[4],
+                "report_data": row[4],
+                "created_at": row[5],
             }
 
         # Try result_id lookup (case-insensitive, handle whitespace and NULLs)
         row = session.execute(
             text("""
-                SELECT id, key, user_id, result_id, created_at 
+                SELECT id, key, user_id, result_id, report_data, created_at 
                 FROM verification_keys 
                 WHERE result_id IS NOT NULL 
                   AND result_id != '' 
@@ -97,7 +109,8 @@ def get_key(key: str) -> Optional[dict]:
                 "key": row[1],
                 "user_id": row[2],
                 "result_id": row[3],
-                "created_at": row[4],
+                "report_data": row[4],
+                "created_at": row[5],
             }
 
         return None
