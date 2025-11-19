@@ -2168,7 +2168,7 @@ def delete_student_data(student_name, student_class):
         return False
 
 def save_draft_report(report_data):
-    """Save incomplete report as draft - now uses database for persistence"""
+    """Save incomplete report as draft - now uses database for persistence with multiple backup locations"""
     try:
         # Generate consistent draft ID based on student, class, term, and teacher
         student_name = report_data.get('student_name', '')
@@ -2188,19 +2188,21 @@ def save_draft_report(report_data):
         # Try to save to database (primary storage)
         db_saved = save_draft_db(report_data)
         
-        # Also save to local file as backup (will be lost on restart but useful for debugging)
+        # Save to multiple local directories for persistence across app restarts
+        backup_dirs = ["draft_reports", "draft_backup", "draft_archive"]
         file_saved = False
-        try:
-            draft_dir = "draft_reports"
-            os.makedirs(draft_dir, exist_ok=True)
-            filename = f"draft_{consistent_id}.json"
-            filepath = os.path.join(draft_dir, filename)
-            
-            with open(filepath, 'w') as f:
-                json.dump(report_data, f, indent=2)
-            file_saved = True
-        except Exception as e:
-            pass
+        
+        for draft_dir in backup_dirs:
+            try:
+                os.makedirs(draft_dir, exist_ok=True)
+                filename = f"draft_{consistent_id}.json"
+                filepath = os.path.join(draft_dir, filename)
+                
+                with open(filepath, 'w') as f:
+                    json.dump(report_data, f, indent=2)
+                file_saved = True
+            except Exception as e:
+                continue
 
         create_audit_log("draft_report_saved", st.session_state.get('teacher_id', 'unknown'), {
             "student_name": report_data.get('student_name', ''),
@@ -2218,7 +2220,7 @@ def get_draft_reports(teacher_id=None, folder=None):
     """Get all draft reports from database, optionally filtered by teacher and/or folder.
 
     Folder is a logical tag stored inside each draft JSON under the key 'folder'.
-    Now uses database for persistence across app restarts.
+    Now uses database for persistence across app restarts with multi-directory fallback.
     """
     try:
         # Try to get drafts from database first (primary storage)
@@ -2226,30 +2228,39 @@ def get_draft_reports(teacher_id=None, folder=None):
         if db_drafts:
             return db_drafts
         
-        # Fallback to file system if database is unavailable
-        draft_dir = "draft_reports"
-        if not os.path.exists(draft_dir):
-            return []
-
+        # Fallback to multiple file system directories if database is unavailable
+        backup_dirs = ["draft_reports", "draft_backup", "draft_archive"]
         draft_reports = []
-        for filename in os.listdir(draft_dir):
-            if filename.startswith('draft_') and filename.endswith('.json'):
-                filepath = os.path.join(draft_dir, filename)
-                try:
-                    with open(filepath, 'r') as f:
-                        draft_data = json.load(f)
+        seen_draft_ids = set()
+        
+        for draft_dir in backup_dirs:
+            if not os.path.exists(draft_dir):
+                continue
+                
+            for filename in os.listdir(draft_dir):
+                if filename.startswith('draft_') and filename.endswith('.json'):
+                    filepath = os.path.join(draft_dir, filename)
+                    try:
+                        with open(filepath, 'r') as f:
+                            draft_data = json.load(f)
+                            
+                            # Skip duplicates
+                            draft_id = draft_data.get('draft_id')
+                            if draft_id in seen_draft_ids:
+                                continue
+                            seen_draft_ids.add(draft_id)
 
-                        # Filter by teacher if specified
-                        if teacher_id and draft_data.get('teacher_id') != teacher_id:
-                            continue
+                            # Filter by teacher if specified
+                            if teacher_id and draft_data.get('teacher_id') != teacher_id:
+                                continue
 
-                        # Filter by folder if specified (folder stored in draft JSON)
-                        if folder and draft_data.get('folder') != folder:
-                            continue
+                            # Filter by folder if specified (folder stored in draft JSON)
+                            if folder and draft_data.get('folder') != folder:
+                                continue
 
-                        draft_reports.append(draft_data)
-                except Exception:
-                    continue
+                            draft_reports.append(draft_data)
+                    except Exception:
+                        continue
 
         # Sort by last modified date
         draft_reports.sort(key=lambda x: x.get('last_modified', ''), reverse=True)
@@ -2258,23 +2269,25 @@ def get_draft_reports(teacher_id=None, folder=None):
         return []
 
 def delete_draft_report(draft_id):
-    """Delete a draft report from database and local file"""
+    """Delete a draft report from database and all backup locations"""
     try:
         # Delete from database (primary storage)
         db_deleted = delete_draft_db(draft_id)
         
-        # Also delete from local file (backup)
+        # Delete from all backup directories
+        backup_dirs = ["draft_reports", "draft_backup", "draft_archive"]
         file_deleted = False
-        try:
-            draft_dir = "draft_reports"
-            filename = f"draft_{draft_id}.json"
-            filepath = os.path.join(draft_dir, filename)
+        
+        for draft_dir in backup_dirs:
+            try:
+                filename = f"draft_{draft_id}.json"
+                filepath = os.path.join(draft_dir, filename)
 
-            if os.path.exists(filepath):
-                os.remove(filepath)
-                file_deleted = True
-        except Exception:
-            pass
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                    file_deleted = True
+            except Exception:
+                continue
 
         create_audit_log("draft_report_deleted", st.session_state.get('teacher_id', 'unknown'), {
             "draft_id": draft_id,
@@ -2302,36 +2315,41 @@ def _ensure_draft_folder_index():
 
 
 def list_draft_folders():
-    """Return a list of folder names for drafts, from database and file system."""
+    """Return a list of folder names for drafts, from database and all backup directories."""
     try:
         folders = set()
         
         # Get folders from database drafts (primary storage)
         try:
             db_drafts = get_drafts_db()
-            for draft in db_drafts:
-                fval = draft.get('folder')
-                if fval and isinstance(fval, str):
-                    folders.add(fval)
+            if db_drafts:
+                for draft in db_drafts:
+                    fval = draft.get('folder')
+                    if fval and isinstance(fval, str):
+                        folders.add(fval)
         except Exception:
             pass
         
-        # Also check local file system (backup)
-        try:
-            draft_dir = "draft_reports"
-            if os.path.exists(draft_dir):
-                # Load explicit folders index
-                index_path = _ensure_draft_folder_index()
-                try:
-                    with open(index_path, 'r') as f:
-                        explicit = json.load(f)
-                        for f_name in explicit:
-                            if f_name and isinstance(f_name, str):
-                                folders.add(f_name)
-                except Exception:
-                    pass
+        # Check all backup directories for folder metadata
+        backup_dirs = ["draft_reports", "draft_backup", "draft_archive"]
+        for draft_dir in backup_dirs:
+            try:
+                if not os.path.exists(draft_dir):
+                    continue
+                    
+                # Load explicit folders index (only from primary directory)
+                if draft_dir == "draft_reports":
+                    index_path = _ensure_draft_folder_index()
+                    try:
+                        with open(index_path, 'r') as f:
+                            explicit = json.load(f)
+                            for f_name in explicit:
+                                if f_name and isinstance(f_name, str):
+                                    folders.add(f_name)
+                    except Exception:
+                        pass
 
-                # Scan draft files for folder metadata
+                # Scan draft files for folder metadata in all directories
                 for filename in os.listdir(draft_dir):
                     if filename.startswith('draft_') and filename.endswith('.json'):
                         try:
@@ -2342,8 +2360,8 @@ def list_draft_folders():
                                     folders.add(fval)
                         except Exception:
                             continue
-        except Exception:
-            pass
+            except Exception:
+                continue
 
         # Normalize and return sorted list
         return sorted([f for f in folders if f])
@@ -2419,22 +2437,23 @@ def delete_draft_folder(folder_name, move_contents_to_root=True):
             except Exception:
                 pass
             
-            # Move file system drafts to root
-            draft_dir = "draft_reports"
-            if os.path.exists(draft_dir):
-                for filename in os.listdir(draft_dir):
-                    if filename.startswith('draft_') and filename.endswith('.json'):
-                        filepath = os.path.join(draft_dir, filename)
-                        try:
-                            with open(filepath, 'r') as rf:
-                                data = json.load(rf)
-                            if data.get('folder') == folder_name:
-                                data.pop('folder', None)
-                                data['last_modified'] = datetime.now().isoformat()
-                                with open(filepath, 'w') as wf:
-                                    json.dump(data, wf, indent=2)
-                        except Exception:
-                            continue
+            # Move file system drafts to root in all backup directories
+            backup_dirs = ["draft_reports", "draft_backup", "draft_archive"]
+            for draft_dir in backup_dirs:
+                if os.path.exists(draft_dir):
+                    for filename in os.listdir(draft_dir):
+                        if filename.startswith('draft_') and filename.endswith('.json'):
+                            filepath = os.path.join(draft_dir, filename)
+                            try:
+                                with open(filepath, 'r') as rf:
+                                    data = json.load(rf)
+                                if data.get('folder') == folder_name:
+                                    data.pop('folder', None)
+                                    data['last_modified'] = datetime.now().isoformat()
+                                    with open(filepath, 'w') as wf:
+                                        json.dump(data, wf, indent=2)
+                            except Exception:
+                                continue
 
         create_audit_log("draft_folder_deleted", st.session_state.get('teacher_id', 'unknown'), {
             "folder": folder_name,
@@ -2446,7 +2465,7 @@ def delete_draft_folder(folder_name, move_contents_to_root=True):
 
 
 def move_draft_to_folder(draft_id, folder_name):
-    """Move a draft to a folder by updating its metadata in database and file. Returns True on success."""
+    """Move a draft to a folder by updating its metadata in database and all backup files. Returns True on success."""
     try:
         if not draft_id or not folder_name:
             return False
@@ -2459,23 +2478,25 @@ def move_draft_to_folder(draft_id, folder_name):
         # Update in database (primary storage)
         db_updated = move_draft_to_folder_db(draft_id, folder_name)
         
-        # Also update in file system (backup)
+        # Update in all backup directories
+        backup_dirs = ["draft_reports", "draft_backup", "draft_archive"]
         file_updated = False
-        try:
-            draft_dir = "draft_reports"
-            filepath = os.path.join(draft_dir, f"draft_{draft_id}.json")
-            if os.path.exists(filepath):
-                with open(filepath, 'r') as f:
-                    data = json.load(f)
+        
+        for draft_dir in backup_dirs:
+            try:
+                filepath = os.path.join(draft_dir, f"draft_{draft_id}.json")
+                if os.path.exists(filepath):
+                    with open(filepath, 'r') as f:
+                        data = json.load(f)
 
-                data['folder'] = folder_name
-                data['last_modified'] = datetime.now().isoformat()
+                    data['folder'] = folder_name
+                    data['last_modified'] = datetime.now().isoformat()
 
-                with open(filepath, 'w') as f:
-                    json.dump(data, f, indent=2)
-                file_updated = True
-        except Exception:
-            pass
+                    with open(filepath, 'w') as f:
+                        json.dump(data, f, indent=2)
+                    file_updated = True
+            except Exception:
+                continue
 
         create_audit_log("draft_moved", st.session_state.get('teacher_id', 'unknown'), {
             "draft_id": draft_id,
