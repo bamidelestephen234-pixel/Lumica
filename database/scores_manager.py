@@ -115,6 +115,7 @@ def save_report(report_id, student_name, student_class, term, total_score, avera
 def save_subject_score(report_id, subject, ca_score, exam_score, total_score, cumulative, grade):
     """
     Save individual subject score to the database.
+    Uses upsert logic to avoid duplicates when the same report is saved multiple times.
     
     Args:
         report_id: Report ID (foreign key to reports table)
@@ -130,6 +131,16 @@ def save_subject_score(report_id, subject, ca_score, exam_score, total_score, cu
     """
     session = db_manager.get_session()
     try:
+        # First, delete any existing score for this report and subject to avoid duplicates
+        session.execute(
+            text('''
+                DELETE FROM subject_scores 
+                WHERE report_id = :report_id AND subject = :subject
+            '''),
+            {'report_id': report_id, 'subject': subject}
+        )
+        
+        # Now insert the new score
         session.execute(
             text('''
                 INSERT INTO subject_scores (report_id, subject, ca_score, exam_score, total_score, cumulative, grade)
@@ -301,3 +312,176 @@ def get_subject_history(student_name, student_class, subject):
         return []
     finally:
         db_manager.close_session(session)
+
+
+def migrate_json_reports_to_database(json_reports_dirs=None):
+    """
+    Migrate existing JSON reports to the database.
+    
+    Args:
+        json_reports_dirs: List of directories to scan for JSON reports.
+                          Defaults to ['approved_reports', 'pending_reports']
+    
+    Returns:
+        dict: Statistics about the migration (success_count, error_count, errors)
+    """
+    if json_reports_dirs is None:
+        json_reports_dirs = ['approved_reports', 'pending_reports', 'report_backup']
+    
+    import os
+    import json as json_module
+    
+    success_count = 0
+    error_count = 0
+    errors = []
+    processed_ids = set()
+    
+    for reports_dir in json_reports_dirs:
+        if not os.path.exists(reports_dir):
+            continue
+        
+        for filename in os.listdir(reports_dir):
+            if not filename.endswith('.json'):
+                continue
+            
+            try:
+                filepath = os.path.join(reports_dir, filename)
+                with open(filepath, 'r') as f:
+                    report_data = json_module.load(f)
+                
+                # Skip if already processed
+                report_id = report_data.get('report_id')
+                if report_id in processed_ids:
+                    continue
+                
+                # Skip if missing required fields
+                if not report_data.get('scores_data'):
+                    continue
+                
+                # Try to save to database
+                if save_report_to_database(report_data):
+                    success_count += 1
+                    processed_ids.add(report_id)
+                    print(f"✅ Migrated {filename}")
+                else:
+                    error_count += 1
+                    errors.append(f"{filename}: Failed to save")
+                    
+            except Exception as e:
+                error_count += 1
+                errors.append(f"{filename}: {str(e)}")
+    
+    return {
+        'success_count': success_count,
+        'error_count': error_count,
+        'errors': errors[:10],  # Return first 10 errors
+        'total_processed': success_count + error_count
+    }
+
+
+def save_report_to_database(report_data):
+    """
+    Save a complete report (including all subject scores) to the database.
+    This function extracts data from the report_data dict and persists it.
+    
+    Args:
+        report_data: Dictionary containing report information with keys:
+            - report_id: Unique report identifier
+            - student_name: Student's full name
+            - student_class: Student's class
+            - term: Academic term (e.g., "1st Term")
+            - total_score: Total score across all subjects
+            - average_cumulative: Average cumulative score
+            - final_grade: Final grade letter
+            - teacher_id: ID of teacher who created the report
+            - scores_data: List of tuples/lists with format:
+              [Subject, CA, Exam, Total, Last Term, Cumulative, Grade]
+    
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Extract report metadata
+        report_id = report_data.get('report_id')
+        student_name = report_data.get('student_name')
+        student_class = report_data.get('student_class')
+        term = report_data.get('term')
+        total_score = report_data.get('total_score', 0)
+        average_cumulative = report_data.get('average_cumulative', 0)
+        final_grade = report_data.get('final_grade', 'N/A')
+        teacher_id = report_data.get('teacher_id', 'unknown')
+        
+        if not all([report_id, student_name, student_class, term]):
+            print("Error: Missing required report fields")
+            return False
+        
+        # Save the main report record
+        report_saved = save_report(
+            report_id=report_id,
+            student_name=student_name,
+            student_class=student_class,
+            term=term,
+            total_score=total_score,
+            average_cumulative=average_cumulative,
+            final_grade=final_grade,
+            created_by=teacher_id
+        )
+        
+        if not report_saved:
+            print(f"Failed to save report {report_id} to database")
+            return False
+        
+        # Extract and save individual subject scores
+        scores_data = report_data.get('scores_data', [])
+        
+        if not scores_data:
+            print(f"Warning: No scores_data found for report {report_id}")
+            return True  # Report saved, but no scores to save
+        
+        scores_saved = 0
+        scores_failed = 0
+        
+        for score_row in scores_data:
+            try:
+                # scores_data format: [Subject, CA, Exam, Total, Last Term, Cumulative, Grade]
+                if len(score_row) >= 7:
+                    subject = score_row[0]
+                    ca_score = float(score_row[1]) if score_row[1] is not None else 0
+                    exam_score = float(score_row[2]) if score_row[2] is not None else 0
+                    total_score = float(score_row[3]) if score_row[3] is not None else 0
+                    cumulative = float(score_row[5]) if score_row[5] is not None else 0
+                    grade = score_row[6] if score_row[6] else 'N/A'
+                    
+                    score_saved = save_subject_score(
+                        report_id=report_id,
+                        subject=subject,
+                        ca_score=ca_score,
+                        exam_score=exam_score,
+                        total_score=total_score,
+                        cumulative=cumulative,
+                        grade=grade
+                    )
+                    
+                    if score_saved:
+                        scores_saved += 1
+                    else:
+                        scores_failed += 1
+                        print(f"Failed to save score for {subject}")
+            except Exception as e:
+                scores_failed += 1
+                print(f"Error saving subject score: {e}")
+                continue
+        
+        # Report success/failure based on whether all scores were saved
+        if scores_failed > 0:
+            print(f"⚠️ Report {report_id}: Saved {scores_saved} subject scores, but {scores_failed} failed")
+            return False  # Return False if any scores failed to save
+        
+        print(f"✅ Report {report_id}: Successfully saved all {scores_saved} subject scores")
+        return True
+        
+    except Exception as e:
+        print(f"Error in save_report_to_database: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
