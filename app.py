@@ -302,6 +302,9 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 
+from utils.ai_insights import generate_predictive_insight
+from database.scores_manager import save_report, save_subject_score, get_student_scores, get_student_historical_scores, get_subject_history
+
 # Simple cooldown to avoid hammering the remote DB when pool limits are hit
 DB_COOLDOWN_UNTIL = 0
 # Counters for admin diagnostics
@@ -2040,8 +2043,9 @@ def generate_class_reports(student_class, term, subject_scores_dict):
                     html = render_html_report(student_name, student_class, term, report_df, total_term_score, average_cumulative, final_grade, logo_base64, student)
 
                     # Save as pending report
+                    report_id = generate_report_id()
                     report_data = {
-                        "report_id": generate_report_id(),
+                        "report_id": report_id,
                         "student_name": student_name,
                         "student_class": student_class,
                         "term": term,
@@ -2057,6 +2061,29 @@ def generate_class_reports(student_class, term, subject_scores_dict):
                     }
 
                     save_pending_report(report_data)
+                    
+                    teacher_id = st.session_state.get('teacher_id', None)
+                    report_saved = save_report(report_id, student_name, student_class, term, total_term_score, average_cumulative, final_grade, teacher_id)
+                    
+                    if report_saved:
+                        for index, row in report_df.iterrows():
+                            subject = row['Subject']
+                            ca = row['CA']
+                            exam = row['Exam']
+                            total = row['Total']
+                            cumulative = row['Cumulative']
+                            grade = row['Grade']
+                            
+                            save_subject_score(
+                                report_id=report_id,
+                                subject=subject,
+                                ca_score=ca,
+                                exam_score=exam,
+                                total_score=total,
+                                cumulative=cumulative,
+                                grade=grade
+                            )
+                    
                     success_count += 1
 
             except Exception as e:
@@ -5265,6 +5292,52 @@ def report_generator_tab():
         all_cumulatives.append(subject_cumulative)
 
         scores_data.append((subject, ca, exam, total, last_cumulative, subject_cumulative, "-"))
+        
+        if ca > 0 or exam > 0:
+            with st.expander(f"🤖 AI Predictive Insight for {subject}", expanded=False):
+                with st.spinner("Generating AI prediction..."):
+                    prediction = generate_predictive_insight(last_cumulative, ca, exam, student_name, student_class, subject)
+                    
+                    if not prediction.get('error', False):
+                        st.success(f"**Prediction:** {prediction['prediction']}")
+                        
+                        col_pred1, col_pred2, col_pred3 = st.columns(3)
+                        with col_pred1:
+                            st.metric("Expected Range", prediction['expected_range'])
+                        with col_pred2:
+                            improvement_color = "🟢" if prediction['improvement_probability'] >= 70 else "🟡" if prediction['improvement_probability'] >= 40 else "🔴"
+                            st.metric("Improvement Probability", f"{improvement_color} {prediction['improvement_probability']}%")
+                        with col_pred3:
+                            current_status = "Improving" if total > last_cumulative else "Needs Support" if total < last_cumulative else "Stable"
+                            st.metric("Current Status", current_status)
+                    else:
+                        st.info(prediction['prediction'])
+        
+        st.markdown("---")
+
+    if selected_subjects and len(all_cumulatives) > 0:
+        st.markdown("### 🎯 Overall AI Prediction")
+        avg_last_term = np.mean([st.session_state.get(f"{s}_last", 0) for s in selected_subjects if st.session_state.get(f"{s}_last", 0) > 0]) if any(st.session_state.get(f"{s}_last", 0) > 0 for s in selected_subjects) else 0
+        avg_ca = np.mean([st.session_state.get(f"{s}_ca", 0) for s in selected_subjects])
+        avg_exam = np.mean([st.session_state.get(f"{s}_exam", 0) for s in selected_subjects])
+        
+        if avg_ca > 0 or avg_exam > 0:
+            with st.spinner("Generating overall AI prediction..."):
+                overall_prediction = generate_predictive_insight(avg_last_term, avg_ca, avg_exam, student_name, student_class, "Overall")
+                
+                if not overall_prediction.get('error', False):
+                    st.info(f"**Overall Performance Prediction:** {overall_prediction['prediction']}")
+                    
+                    col_overall1, col_overall2, col_overall3 = st.columns(3)
+                    with col_overall1:
+                        st.metric("Expected Overall Range", overall_prediction['expected_range'])
+                    with col_overall2:
+                        improvement_emoji = "🟢" if overall_prediction['improvement_probability'] >= 70 else "🟡" if overall_prediction['improvement_probability'] >= 40 else "🔴"
+                        st.metric("Overall Improvement", f"{improvement_emoji} {overall_prediction['improvement_probability']}%")
+                    with col_overall3:
+                        current_avg = avg_ca + avg_exam
+                        trend = "📈 Improving" if current_avg > avg_last_term else "📉 Declining" if current_avg < avg_last_term else "➡️ Stable"
+                        st.metric("Performance Trend", trend)
 
     # Auto-save and draft management
     col_auto1, col_auto2, col_auto3 = st.columns([1, 1, 1])
@@ -5458,6 +5531,28 @@ def report_generator_tab():
                 report_id = generate_report_id()
                 html = render_html_report(student_name, student_class, term, report_df, total_term_score, average_cumulative, final_grade, logo_base64, student_data, report_details, report_id)
                 HTML(string=html).write_pdf("report_card.pdf")
+                
+                teacher_id = st.session_state.get('teacher_id', None)
+                report_saved = save_report(report_id, student_name, student_class, term, total_term_score, average_cumulative, final_grade, teacher_id)
+                
+                if report_saved:
+                    for index, row in report_df.iterrows():
+                        subject = row['Subject']
+                        ca = row['CA']
+                        exam = row['Exam']
+                        total = row['Total']
+                        cumulative = row['Cumulative']
+                        grade = row['Grade']
+                        
+                        save_subject_score(
+                            report_id=report_id,
+                            subject=subject,
+                            ca_score=ca,
+                            exam_score=exam,
+                            total_score=total,
+                            cumulative=cumulative,
+                            grade=grade
+                        )
 
             st.success("✅ Report Card Generated Successfully!")
 
