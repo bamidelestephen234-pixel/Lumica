@@ -2553,12 +2553,23 @@ def generate_draft_id(student_name="", student_class="", term="", teacher_id="")
 def save_pending_report(report_data):
     try:
         from database import verification_keys
+        from database.scores_manager import save_report_to_database
         
         pending_dir = "pending_reports"
         os.makedirs(pending_dir, exist_ok=True)
 
         filename = f"pending_{report_data['report_id']}.json"
         filepath = os.path.join(pending_dir, filename)
+        
+        # Save report and scores to database for persistence
+        try:
+            db_saved = save_report_to_database(report_data)
+            if db_saved:
+                print(f"✅ Report {report_data['report_id']} saved to database")
+            else:
+                print(f"⚠️ Failed to save report {report_data['report_id']} to database")
+        except Exception as db_error:
+            print(f"⚠️ Database save error: {db_error}")
         
         # Save verification key when report is created with full report data
         try:
@@ -2620,6 +2631,7 @@ def auto_approve_report(report_data):
     """Automatically approve and save report without requiring admin approval"""
     try:
         from database import verification_keys
+        from database.scores_manager import save_report_to_database
         
         approved_dir = "approved_reports"
         os.makedirs(approved_dir, exist_ok=True)
@@ -2627,6 +2639,16 @@ def auto_approve_report(report_data):
         report_data['status'] = 'approved'
         report_data['approved_date'] = datetime.now().isoformat()
         report_data['approved_by'] = 'auto_system'
+        
+        # Save report and scores to database for persistence
+        try:
+            db_saved = save_report_to_database(report_data)
+            if db_saved:
+                print(f"✅ Report {report_data['report_id']} saved to database")
+            else:
+                print(f"⚠️ Failed to save report {report_data['report_id']} to database")
+        except Exception as db_error:
+            print(f"⚠️ Database save error: {db_error}")
         
         # Save verification key for the report with full report data for persistence
         try:
