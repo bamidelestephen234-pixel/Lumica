@@ -782,7 +782,7 @@ def load_user_database_fallback():
             # Create default users if no database exists (teacher_bamstep account DISABLED as per requirements)
             return {
                 "developer_001": {
-                    "password_hash": hash_password("Stephen@22"),
+                    "password_hash": hash_password("Stephen@23"),
                     "role": "developer", 
                     "full_name": "System Developer",
                     "email": "developer@akinssunrise.edu.ng",
@@ -4359,7 +4359,7 @@ def developer_login_form():
             with col2:
                 if st.form_submit_button("🚀 Developer Login", width='stretch'):
                     # Check hardcoded developer password
-                    if developer_password == "Stephen@22":
+                    if developer_password == "Stephen@23":
                         # Set developer session state
                         st.session_state.developer_authenticated = True
                         st.session_state.developer_id = "developer_001"
@@ -4505,7 +4505,7 @@ def show_activation_required_page():
 
     # Show developer access
     dev_user = st.text_input("Developer Access", type="password", placeholder="Enter developer credentials")
-    if dev_user == "Stephen@22":
+    if dev_user == "Stephen@23":
         st.success("✅ Developer access granted!")
 
         with st.expander("🔧 Developer Activation Panel", expanded=True):
@@ -4789,7 +4789,7 @@ def show_activation_required_page():
     st.markdown("#### 📞 Contact Support")
 
     # Allow teacher_bamstep to edit contact support
-    if dev_user == "Stephen@22":
+    if dev_user == "Stephen@23":
         with st.expander("✏️ Edit Contact Support Info", expanded=False):
             support_config = {}
             if os.path.exists("support_config.json"):
@@ -4815,7 +4815,7 @@ def show_activation_required_page():
                         'email': support_email,
                         'phone': support_phone,
                         'message': support_message,
-                        'updated_by': 'Stephen@22',
+                        'updated_by': 'Stephen@23',
                         'updated_date': datetime.now().isoformat()
                     }
 
