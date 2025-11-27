@@ -7627,7 +7627,7 @@ def admin_panel_tab():
                     school_website = st.text_input("School Website", 
                                                  value=school_config.get('school_website', "www.akinssunrise.edu.ng"))
                     school_motto = st.text_input("School Motto", 
-                                               value=school_config.get('school_motto', "Excellence in Education"))
+                                               value=school_config.get('school_motto', "Integrity And Excellent Performance"))
                     principal_name = st.text_input("Principal Name", 
                                                  value=school_config.get('principal_name', "Dr. Principal Name"))
                     vice_principal_name = st.text_input("Vice Principal Name", 
