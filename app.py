@@ -2959,7 +2959,7 @@ def get_default_report_email_template():
     """Get default report email template"""
     return """
 AKIN'S SUNRISE SECONDARY SCHOOL
-SUNRISE AVENUE OFF LUJOJOMU ROAD
+SUNRISE AVENUE OFF LUJOMU ROAD
 UPPER AYEYEMI, ONDO CITY
 ONDO STATE, NIGERIA
 
@@ -3575,7 +3575,7 @@ def render_html_report(student_name, student_class, term, report_df, term_total,
     # Load school configuration for report header
     school_config = load_school_config()
     school_name = school_config.get('school_name', "AKIN'S SUNRISE SECONDARY SCHOOL, ONDO")
-    school_address = school_config.get('school_address', "SUNRISE AVENUE OFF LUJOJOMU ROAD, UPPER AAYEYEMI, ONDO CITY")
+    school_address = school_config.get('school_address', "SUNRISE AVENUE OFF LUJOMU ROAD, UPPER AAYEYEMI, ONDO CITY")
 
     # Load branding configuration
     branding_config = load_branding_config()
@@ -7617,7 +7617,7 @@ def admin_panel_tab():
                                               value=school_config.get('school_name', "AKIN'S SUNRISE SECONDARY SCHOOL"))
                     school_address = st.text_area("School Address", 
                                                 value=school_config.get('school_address', 
-                                                "SUNRISE AVENUE OFF LUJOJOMU ROAD\nUPPER AYEYEMI, ONDO CITY\nONDO STATE, NIGERIA"))
+                                                "SUNRISE AVENUE OFF LUJOMU ROAD\nUPPER AYEYEMI, ONDO CITY\nONDO STATE, NIGERIA"))
                     school_phone = st.text_input("School Phone", 
                                                 value=school_config.get('school_phone', "+234 800 123 4567"))
                     school_email = st.text_input("School Email", 
