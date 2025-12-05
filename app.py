@@ -3834,8 +3834,8 @@ def render_html_report(student_name, student_class, term, report_df, term_total,
                     <thead>
                         <tr>
                             <th>Subject</th>
-                            <th>CA Score (40)</th>
-                            <th>Exam Score (60)</th>
+                            <th>CA Score (50)</th>
+                            <th>Exam Score (50)</th>
                             <th>Total (100)</th>
                             <th>Cumulative</th>
                             <th>Grade</th>
