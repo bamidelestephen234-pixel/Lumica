@@ -598,7 +598,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 subjects = sorted([
     "English", "Maths", "French", "C.C Art", "Business Studies", "Economics",
-    "Yoruba","Technical Drawing", "physics", "chemistry", "Biology", "Further Mathematics",
+    "Yoruba","Technical Drawing","History", "physics", "chemistry", "Biology", "Further Mathematics",
     "National Value", "Lit-in-Eng", "Guidance & Counseling", "C.R.S",
     "Agric Sci", "Home Eco", "Basic Science", "Basic Tech", "PHE", "Computer",
     "civic Education", "Goverment", "Geography", "Animal Husbandry", "Marketing",
