@@ -5297,8 +5297,8 @@ def report_generator_tab():
     for subject in sorted(selected_subjects):
         st.markdown(f"#### ✏️ {subject}")
 
-        ca = st.number_input(f"{subject} - Continuous Assessment (CA)", min_value=0, max_value=40, key=f"{subject}_ca")
-        exam = st.number_input(f"{subject} - Exam Score", min_value=0, max_value=60, key=f"{subject}_exam")
+        ca = st.number_input(f"{subject} - Continuous Assessment (CA)", min_value=0, max_value=50, key=f"{subject}_ca")
+        exam = st.number_input(f"{subject} - Exam Score", min_value=0, max_value=50, key=f"{subject}_exam")
         last_cumulative = st.number_input(f"{subject} - Last Term Cumulative", min_value=0, max_value=100, key=f"{subject}_last")
 
         total = calculate_total(ca, exam)
