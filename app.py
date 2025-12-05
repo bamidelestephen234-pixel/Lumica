@@ -7890,8 +7890,8 @@ def admin_panel_tab():
                                                     value=form_config.get('grade_boundaries', {}).get('F', 30))
 
                     assessment_weights = st.text_input("Assessment Weights (CA:Exam)", 
-                                                     value=form_config.get('assessment_weights', '40:60'),
-                                                     help="Format: CA_weight:Exam_weight (e.g., 40:60)")
+                                                     value=form_config.get('assessment_weights', '50:50'),
+                                                     help="Format: CA_weight:Exam_weight (e.g., 50:50)")
 
                     if st.form_submit_button("💾 Save Grading System"):
                         form_config['grade_boundaries'] = {
