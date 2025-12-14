@@ -1797,7 +1797,145 @@ def get_audit_logs(start_date: str = None, end_date: str = None, user_id: str = 
     except Exception:
         return []
 
-def save_student_data(student_name, student_class, parent_name, parent_email, parent_phone, student_photo=None, gender=None, admission_no=None, class_size=None, attendance=None, position=None):
+def save_student_data(student_name, student_class, parent_name, parent_email, parent_phone, student_photo=None, gender=None, admission_no=None, class_size=None, attendance=None, position=None, password: str = None):
+    # Prefer database-backed student persistence when available
+    try:
+        conn = get_healthy_sql_connection()
+    except Exception:
+        conn = None
+
+    # If DB connection exists, upsert into students table
+    if conn:
+        try:
+            # Ensure photo_filename column exists (SQLite doesn't support IF NOT EXISTS in ALTER TABLE)
+            try:
+                from sqlalchemy.engine import Engine
+                conn2 = get_healthy_sql_connection()
+                if conn2 is not None and Engine and isinstance(conn2, Engine):
+                    with conn2.connect() as c:
+                        dialect = c.dialect.name
+                        if dialect == 'sqlite':
+                            # Check if column exists
+                            res = c.execute(text("PRAGMA table_info(students)")).fetchall()
+                            cols = [r[1] for r in res]
+                            if 'photo_filename' not in cols:
+                                c.execute(text("ALTER TABLE students ADD COLUMN photo_filename TEXT"))
+                        else:
+                            c.execute(text("ALTER TABLE students ADD COLUMN IF NOT EXISTS photo_filename TEXT"))
+                else:
+                    execute_sql_with_retry("ALTER TABLE students ADD COLUMN IF NOT EXISTS photo_filename TEXT")
+            except Exception:
+                pass
+
+            # Prepare values
+            admission = admission_no or f"ASS/{str(datetime.now().year)[-2:]}/{len(get_all_students()) + 1:03d}"
+            student_id = str(uuid.uuid4())
+            enc_key = generate_encryption_key("akins_sunrise_school_encryption")
+            enc_parent_email = encrypt_data(parent_email, enc_key) if parent_email else None
+            enc_parent_phone = encrypt_data(parent_phone, enc_key) if parent_phone else None
+
+            insert_sql = text("""
+                INSERT INTO students (student_id, full_name, class_name, admission_number, gender, parent_name, parent_email, parent_phone, password_hash, created_at, updated_at, photo_filename)
+                VALUES (:student_id, :full_name, :class_name, :admission_number, :gender, :parent_name, :parent_email, :parent_phone, :password_hash, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, :photo_filename)
+                ON CONFLICT (admission_number) DO UPDATE SET
+                    full_name = EXCLUDED.full_name,
+                    class_name = EXCLUDED.class_name,
+                    gender = EXCLUDED.gender,
+                    parent_name = EXCLUDED.parent_name,
+                    parent_email = EXCLUDED.parent_email,
+                    parent_phone = EXCLUDED.parent_phone,
+                    updated_at = CURRENT_TIMESTAMP,
+                    photo_filename = COALESCE(EXCLUDED.photo_filename, students.photo_filename),
+                    password_hash = COALESCE(EXCLUDED.password_hash, students.password_hash)
+            """)
+
+            photo_filename = None
+            if student_photo is not None:
+                try:
+                    students_dir = "student_database_photos"
+                    os.makedirs(students_dir, exist_ok=True)
+                    photo_filename = f"{admission.replace('/', '_')}_photo.jpg"
+                    photo_path = os.path.join(students_dir, photo_filename)
+                    if hasattr(student_photo, 'read'):
+                        data = student_photo.read()
+                    else:
+                        data = student_photo
+                    with open(photo_path, 'wb') as pf:
+                        pf.write(data)
+                except Exception as e:
+                    create_audit_log("photo_upload_error", st.session_state.get('teacher_id', 'unknown'), {"error": str(e), "student_name": student_name}, "error")
+
+            # Hash password if provided
+            pwd_hash = None
+            try:
+                if password:
+                    from utils.security import hash_password
+                    pwd_hash = hash_password(password)
+            except Exception:
+                pwd_hash = None
+
+            params = {
+                'student_id': student_id,
+                'full_name': student_name,
+                'class_name': student_class,
+                'admission_number': admission,
+                'gender': gender or '',
+                'parent_name': parent_name or '',
+                'parent_email': enc_parent_email,
+                'parent_phone': enc_parent_phone,
+                'password_hash': pwd_hash,
+                'photo_filename': photo_filename
+            }
+
+            execute_sql_with_retry(insert_sql, params)
+
+            # Some installations may have a legacy `students` table schema (created by models.py)
+            # which uses `admission_no` / `student_name` instead of `student_id` and `full_name`.
+            # If the above insert fails due to missing columns, attempt a compatible insert.
+        except Exception as e:
+            try:
+                # Attempt legacy-style insert
+                legacy_sql = text("""
+                    INSERT INTO students (admission_no, student_name, student_class, gender, parent_name, parent_email, parent_phone, created_date, photo_path)
+                    VALUES (:admission_number, :full_name, :class_name, :gender, :parent_name, :parent_email, :parent_phone, CURRENT_TIMESTAMP, :photo_filename)
+                    ON CONFLICT(admission_no) DO UPDATE SET
+                        student_name = EXCLUDED.student_name,
+                        student_class = EXCLUDED.student_class,
+                        gender = EXCLUDED.gender,
+                        parent_name = EXCLUDED.parent_name,
+                        parent_email = EXCLUDED.parent_email,
+                        parent_phone = EXCLUDED.parent_phone,
+                        photo_path = COALESCE(EXCLUDED.photo_path, students.photo_path)
+                """)
+                legacy_params = {
+                    'admission_number': admission,
+                    'full_name': student_name,
+                    'class_name': student_class,
+                    'gender': gender or '',
+                    'parent_name': parent_name or '',
+                    'parent_email': enc_parent_email,
+                    'parent_phone': enc_parent_phone,
+                    'photo_filename': photo_filename
+                }
+                execute_sql_with_retry(legacy_sql, legacy_params)
+            except Exception:
+                # Finally, record the audit and fall through to JSON fallback
+                create_audit_log("student_data_error", st.session_state.get('teacher_id', 'unknown'), {"error": str(e), "student_name": student_name}, "error")
+                # Fall through to file fallback
+
+            create_audit_log("student_data_created", st.session_state.get('teacher_id', 'unknown'), {
+                "student_name": student_name,
+                "student_class": student_class,
+                "admission_no": admission,
+                "data_encrypted": bool(parent_email)
+            }, "personal_data")
+
+            return True
+        except Exception as e:
+            create_audit_log("student_data_error", st.session_state.get('teacher_id', 'unknown'), {"error": str(e), "student_name": student_name}, "error")
+            # Fall through to file fallback
+
+    # Fallback to JSON file persistence (existing behavior)
     try:
         students_dir = "student_database"
         if not os.path.exists(students_dir):
@@ -1823,6 +1961,14 @@ def save_student_data(student_name, student_class, parent_name, parent_email, pa
             "compliance_level": "gdpr_compliant"
         }
 
+        # Store password hash in JSON fallback if provided
+        if password:
+            try:
+                from utils.security import hash_password
+                student_data['password_hash'] = hash_password(password)
+            except Exception:
+                pass
+
         # Handle photo upload or preserve existing photo
         if student_photo is not None:
             try:
@@ -1840,57 +1986,68 @@ def save_student_data(student_name, student_class, parent_name, parent_email, pa
 
                 student_data["photo_filename"] = photo_filename
             except Exception as e:
-                # Log photo upload error but continue with student creation
-                create_audit_log("photo_upload_error", st.session_state.get('teacher_id', 'unknown'), {
-                    "error": str(e),
-                    "student_name": student_name
-                }, "error")
-        else:
-            # Try to preserve existing photo from old record
-            old_filename = f"{student_name.replace(' ', '_')}_{student_class.replace(' ', '_')}.json"
-            old_path = os.path.join(students_dir, old_filename)
-
-            # Also check for old records with different class names (for promotions)
-            existing_students = get_all_students()
-            for existing_student in existing_students:
-                if (existing_student.get('student_name') == student_name or 
-                    existing_student.get('admission_no') == admission_no):
-                    if existing_student.get('photo_filename'):
-                        # Copy photo to new filename if class changed
-                        old_photo_path = os.path.join(students_dir, existing_student['photo_filename'])
-                        if os.path.exists(old_photo_path):
-                            new_photo_filename = f"{student_name.replace(' ', '_')}_photo.jpg"
-                            new_photo_path = os.path.join(students_dir, new_photo_filename)
-
-                            # Copy photo if it's a different filename
-                            if old_photo_path != new_photo_path:
-                                shutil.copy2(old_photo_path, new_photo_path)
-
-                            student_data["photo_filename"] = new_photo_filename
-                        break
+                create_audit_log("photo_upload_error", st.session_state.get('teacher_id', 'unknown'), {"error": str(e), "student_name": student_name}, "error")
 
         student_filename = f"{student_name.replace(' ', '_')}_{student_class.replace(' ', '_')}.json"
         student_path = os.path.join(students_dir, student_filename)
         with open(student_path, 'w') as f:
             json.dump(student_data, f, indent=2)
 
-        create_audit_log("student_data_created", st.session_state.get('teacher_id', 'unknown'), {
-            "student_name": student_name,
-            "student_class": student_class,
-            "has_photo": student_photo is not None or student_data.get('photo_filename') is not None,
-            "data_encrypted": True
-        }, "personal_data")
+        create_audit_log("student_data_created", st.session_state.get('teacher_id', 'unknown'), {"student_name": student_name, "student_class": student_class, "has_photo": student_photo is not None or student_data.get('photo_filename') is not None, "data_encrypted": True}, "personal_data")
 
         return True
     except Exception as e:
-        create_audit_log("student_data_error", st.session_state.get('teacher_id', 'unknown'), {
-            "error": str(e),
-            "student_name": student_name
-        }, "error")
+        create_audit_log("student_data_error", st.session_state.get('teacher_id', 'unknown'), {"error": str(e), "student_name": student_name}, "error")
         return False
 
 def load_student_data(student_name, student_class):
+    """Load student by name+class. Prefer DB, fall back to JSON files."""
     try:
+        conn = None
+        try:
+            conn = get_healthy_sql_connection()
+        except Exception:
+            conn = None
+
+        if conn:
+            try:
+                sql = text("SELECT * FROM students WHERE full_name = :full_name AND class_name = :class_name LIMIT 1")
+                df = query_with_retry(sql, {'full_name': student_name, 'class_name': student_class})
+                if df is not None and not df.empty:
+                    row = df.iloc[0]
+                    student = {
+                        'student_name': row.get('full_name'),
+                        'student_class': row.get('class_name'),
+                        'admission_no': row.get('admission_number'),
+                        'gender': row.get('gender'),
+                        'parent_name': row.get('parent_name'),
+                        'parent_email': row.get('parent_email'),
+                        'parent_phone': row.get('parent_phone'),
+                        'photo_filename': row.get('photo_filename')
+                    }
+                    # Decrypt if needed
+                    if student.get('parent_email'):
+                        try:
+                            student['parent_email'] = decrypt_data(student['parent_email'], generate_encryption_key("akins_sunrise_school_encryption"))
+                        except Exception:
+                            pass
+                    if student.get('parent_phone'):
+                        try:
+                            student['parent_phone'] = decrypt_data(student['parent_phone'], generate_encryption_key("akins_sunrise_school_encryption"))
+                        except Exception:
+                            pass
+
+                    create_audit_log("student_data_accessed", st.session_state.get('teacher_id', 'unknown'), {
+                        "student_name": student_name,
+                        "student_class": student_class,
+                        "access_purpose": "report_generation"
+                    }, "data_access")
+
+                    return student
+            except Exception:
+                pass
+
+        # Fallback to file-based storage
         students_dir = "student_database"
         student_filename = f"{student_name.replace(' ', '_')}_{student_class.replace(' ', '_')}.json"
         student_path = os.path.join(students_dir, student_filename)
@@ -1919,12 +2076,52 @@ def load_student_data(student_name, student_class):
         return None
 
 def get_all_students():
+    """Return all students from DB when available, fallback to JSON files."""
     try:
+        conn = None
+        try:
+            conn = get_healthy_sql_connection()
+        except Exception:
+            conn = None
+
+        students = []
+        if conn:
+            try:
+                df = query_with_retry("SELECT * FROM students ORDER BY full_name")
+                if df is not None and not df.empty:
+                    for _, row in df.iterrows():
+                        student = {
+                            'student_name': row.get('full_name'),
+                            'student_class': row.get('class_name'),
+                            'admission_no': row.get('admission_number'),
+                            'gender': row.get('gender'),
+                            'parent_name': row.get('parent_name'),
+                            'parent_email': row.get('parent_email'),
+                            'parent_phone': row.get('parent_phone'),
+                            'photo_filename': row.get('photo_filename')
+                        }
+                        # Try to decrypt parent contact fields
+                        if student.get('parent_email'):
+                            try:
+                                student['parent_email'] = decrypt_data(student['parent_email'], generate_encryption_key("akins_sunrise_school_encryption"))
+                            except Exception:
+                                pass
+                        if student.get('parent_phone'):
+                            try:
+                                student['parent_phone'] = decrypt_data(student['parent_phone'], generate_encryption_key("akins_sunrise_school_encryption"))
+                            except Exception:
+                                pass
+
+                        students.append(student)
+                    return students
+            except Exception:
+                pass
+
+        # Fallback to file-based storage
         students_dir = "student_database"
         if not os.path.exists(students_dir):
             return []
 
-        students = []
         for file_name in os.listdir(students_dir):
             if file_name.endswith('.json'):
                 file_path = os.path.join(students_dir, file_name)
@@ -1938,6 +2135,479 @@ def get_all_students():
         return students
     except Exception:
         return []
+
+
+def get_student_by_admission(admission_no: str):
+    """Return student record by admission number (DB preferred, fallback to files)."""
+    try:
+        try:
+            conn = get_healthy_sql_connection()
+        except Exception:
+            conn = None
+
+        if conn:
+            try:
+                df = query_with_retry(text("SELECT * FROM students WHERE admission_number = :adm LIMIT 1"), {'adm': admission_no})
+                if df is not None and not df.empty:
+                    row = df.iloc[0]
+                    student = {
+                        'student_name': row.get('full_name'),
+                        'student_class': row.get('class_name'),
+                        'admission_no': row.get('admission_number'),
+                        'gender': row.get('gender'),
+                        'parent_name': row.get('parent_name'),
+                        'parent_email': row.get('parent_email'),
+                        'parent_phone': row.get('parent_phone'),
+                        'photo_filename': row.get('photo_filename')
+                    }
+                    # Decrypt contact info if possible
+                    try:
+                        if student.get('parent_email'):
+                            student['parent_email'] = decrypt_data(student['parent_email'], generate_encryption_key("akins_sunrise_school_encryption"))
+                        if student.get('parent_phone'):
+                            student['parent_phone'] = decrypt_data(student['parent_phone'], generate_encryption_key("akins_sunrise_school_encryption"))
+                    except Exception:
+                        pass
+
+                    # Do not return password_hash to callers
+                    if 'password_hash' in student:
+                        student.pop('password_hash', None)
+
+                    return student
+            except Exception:
+                pass
+
+        # Fallback file search
+        for s in get_all_students():
+            if s.get('admission_no') and s['admission_no'].strip().lower() == admission_no.strip().lower():
+                return s
+        return None
+    except Exception:
+        return None
+
+
+def update_student_data(admission_no: str, updates: dict) -> bool:
+    """Update student record by admission number. Prefer DB, fallback to JSON files."""
+    try:
+        try:
+            conn = get_healthy_sql_connection()
+        except Exception:
+            conn = None
+
+        if conn:
+            try:
+                # Work on a copy to avoid mutating the caller's updates (prevents double-encryption on JSON fallback)
+                db_updates = dict(updates)
+                # Prepare fields to update
+                set_parts = []
+                params = {'adm': admission_no}
+                # Encrypt contact fields for DB-only operation
+                if 'parent_email' in db_updates and db_updates['parent_email'] is not None:
+                    db_updates['parent_email'] = encrypt_data(db_updates['parent_email'], generate_encryption_key("akins_sunrise_school_encryption"))
+                if 'parent_phone' in db_updates and db_updates['parent_phone'] is not None:
+                    db_updates['parent_phone'] = encrypt_data(db_updates['parent_phone'], generate_encryption_key("akins_sunrise_school_encryption"))
+                if 'password' in db_updates and db_updates['password'] is not None:
+                    try:
+                        from utils.security import hash_password
+                        db_updates['password_hash'] = hash_password(db_updates['password'])
+                    except Exception:
+                        db_updates['password_hash'] = None
+                    # Remove raw password
+                    del db_updates['password']
+
+                for k, v in db_updates.items():
+                    if k in ['student_name', 'student_class', 'gender', 'parent_name', 'parent_email', 'parent_phone', 'photo_filename']:
+                        col = 'full_name' if k == 'student_name' else ('class_name' if k == 'student_class' else k)
+                        set_parts.append(f"{col} = :{k}")
+                        params[k] = v
+
+                if set_parts:
+                    update_sql = text(f"UPDATE students SET {', '.join(set_parts)}, updated_at = CURRENT_TIMESTAMP WHERE admission_number = :adm")
+                    success = execute_sql_with_retry(update_sql, params)
+                    if success:
+                        create_audit_log("student_updated", st.session_state.get('teacher_id', 'unknown'), {"admission_no": admission_no, "updates": updates}, "personal_data")
+                        return True
+            except Exception:
+                pass
+
+        # Fallback to JSON file update
+        students_dir = "student_database"
+        if not os.path.exists(students_dir):
+            return False
+
+        for fname in os.listdir(students_dir):
+            if not fname.endswith('.json'):
+                continue
+            path = os.path.join(students_dir, fname)
+            try:
+                with open(path, 'r') as f:
+                    s = json.load(f)
+                if s.get('admission_no') and s['admission_no'].strip().lower() == admission_no.strip().lower():
+                    # Apply updates
+                    for k, v in updates.items():
+                        if k == 'student_name':
+                            s['student_name'] = v
+                        elif k == 'student_class':
+                            s['student_class'] = v
+                        elif k == 'parent_name':
+                            s['parent_name'] = v
+                        elif k == 'parent_email':
+                            s['parent_email'] = encrypt_data(v, generate_encryption_key("akins_sunrise_school_encryption"))
+                        elif k == 'parent_phone':
+                            s['parent_phone'] = encrypt_data(v, generate_encryption_key("akins_sunrise_school_encryption"))
+                        elif k == 'password':
+                            try:
+                                from utils.security import hash_password
+                                s['password_hash'] = hash_password(v)
+                            except Exception:
+                                pass
+                        elif k == 'gender':
+                            s['gender'] = v
+                        elif k == 'photo_filename':
+                            s['photo_filename'] = v
+
+                    s['last_updated'] = datetime.now().isoformat()
+                    with open(path, 'w') as f:
+                        json.dump(s, f, indent=2)
+                    create_audit_log("student_updated", st.session_state.get('teacher_id', 'unknown'), {"admission_no": admission_no, "updates": updates}, "personal_data")
+                    return True
+            except Exception:
+                continue
+
+        return False
+    except Exception:
+        return False
+
+
+def _ensure_student_reports_dir():
+    """Ensure student_reports directory and index file exist and return index path."""
+    reports_dir = "student_reports"
+    os.makedirs(reports_dir, exist_ok=True)
+    index_path = os.path.join(reports_dir, "index.json")
+    if not os.path.exists(index_path):
+        try:
+            with open(index_path, 'w') as f:
+                json.dump({}, f)
+        except Exception:
+            pass
+    return reports_dir, index_path
+
+
+def _load_reports_index():
+    reports_dir, index_path = _ensure_student_reports_dir()
+    try:
+        with open(index_path, 'r') as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_reports_index(index):
+    reports_dir, index_path = _ensure_student_reports_dir()
+    try:
+        with open(index_path, 'w') as f:
+            json.dump(index, f, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def save_report_for_student(admission_no: str, report_id: str, pdf_bytes: bytes, metadata: dict = None) -> bool:
+    """Save a generated PDF report for a student and update index."""
+    try:
+        if not admission_no or not report_id:
+            return False
+        reports_dir, _ = _ensure_student_reports_dir()
+        safe_name = f"{admission_no.replace('/', '_')}_{report_id}.pdf"
+        file_path = os.path.join(reports_dir, safe_name)
+
+        with open(file_path, 'wb') as f:
+            f.write(pdf_bytes)
+
+        # Update JSON index (fallback / compatibility)
+        index = _load_reports_index()
+        index.setdefault(admission_no, [])
+        entry = {
+            'report_id': report_id,
+            'student_name': metadata.get('student_name') if metadata else None,
+            'student_class': metadata.get('student_class') if metadata else None,
+            'term': metadata.get('term') if metadata else None,
+            'file_path': file_path,
+            'created_at': datetime.now().isoformat()
+        }
+        # avoid duplicates
+        existing = [r for r in index[admission_no] if r.get('report_id') == report_id]
+        if not existing:
+            index[admission_no].append(entry)
+
+        saved_index = _save_reports_index(index)
+
+        # Also persist metadata to DB when available
+        try:
+            conn = get_healthy_sql_connection()
+        except Exception:
+            conn = None
+
+        if conn:
+            try:
+                insert_sql = text("INSERT INTO student_reports (admission_number, report_id, file_path, created_at) VALUES (:adm, :rid, :fp, CURRENT_TIMESTAMP)")
+                execute_sql_with_retry(insert_sql, {'adm': admission_no, 'rid': report_id, 'fp': file_path})
+            except Exception:
+                pass
+
+        return saved_index
+    except Exception:
+        return False
+
+
+def list_reports_for_student(admission_no: str):
+    try:
+        # Prefer DB-backed reports when available
+        try:
+            conn = get_healthy_sql_connection()
+        except Exception:
+            conn = None
+
+        reports = []
+        if conn:
+            try:
+                df = query_with_retry(text("SELECT report_id, file_path, created_at FROM student_reports WHERE admission_number = :adm ORDER BY created_at DESC"), {'adm': admission_no})
+                if df is not None and not df.empty:
+                    for _, row in df.iterrows():
+                        reports.append({
+                            'report_id': row.get('report_id'),
+                            'file_path': row.get('file_path'),
+                            'created_at': row.get('created_at').isoformat() if hasattr(row.get('created_at'), 'isoformat') else row.get('created_at')
+                        })
+                    return reports
+            except Exception:
+                pass
+
+        # Fallback to JSON index
+        index = _load_reports_index()
+        return index.get(admission_no, [])
+    except Exception:
+        return []
+
+
+def get_report_file_for_student(admission_no: str, report_id: str):
+    try:
+        reports = list_reports_for_student(admission_no)
+        for r in reports:
+            if r.get('report_id') == report_id:
+                return r.get('file_path')
+        return None
+    except Exception:
+        return None
+
+
+def authenticate_student_with_password(admission_no: str, password: str):
+    """Authenticate a student by admission number and password. Returns student dict on success, else None."""
+    try:
+        if not admission_no or not password:
+            return None
+
+        # Try DB first
+        try:
+            conn = get_healthy_sql_connection()
+        except Exception:
+            conn = None
+
+        if conn:
+            try:
+                df = query_with_retry(text("SELECT * FROM students WHERE admission_number = :adm LIMIT 1"), {'adm': admission_no})
+                if df is not None and not df.empty:
+                    row = df.iloc[0]
+                    pwd_hash = row.get('password_hash')
+                    from utils.security import verify_password
+                    if pwd_hash and verify_password(password, pwd_hash):
+                        return get_student_by_admission(admission_no)
+            except Exception:
+                pass
+
+        # Fallback to JSON file
+        for s in get_all_students():
+            if s.get('admission_no') and s['admission_no'].strip().lower() == admission_no.strip().lower():
+                pwd_hash = s.get('password_hash')
+                try:
+                    from utils.security import verify_password
+                    if pwd_hash and verify_password(password, pwd_hash):
+                        return s
+                except Exception:
+                    pass
+
+        return None
+    except Exception:
+        return None
+
+
+def request_password_reset(admission_no: str, contact_email: str = None) -> str:
+    """Generate and store a password reset token for the student. Returns token or None."""
+    try:
+        if not admission_no:
+            return None
+        from database import verification_keys
+        verification_keys.init_db()
+        from database.verification_keys import save_key
+        token = str(uuid.uuid4())
+        meta = json.dumps({"type": "password_reset", "admission_no": admission_no, "contact_email": contact_email})
+        save_key(token, admission_no, None, meta)
+
+        # Try to send an email if SMTP is configured and contact address provided
+        target_email = contact_email or None
+        try:
+            # If no explicit contact email provided, look up student contact
+            if not target_email:
+                s = get_student_by_admission(admission_no)
+                if s and s.get('parent_email'):
+                    target_email = s.get('parent_email')
+        except Exception:
+            target_email = contact_email
+
+        if target_email:
+            try:
+                send_reset_email(target_email, token, admission_no)
+            except Exception:
+                pass
+
+        return token
+    except Exception:
+        return None
+
+
+def reset_password_with_token(token: str, admission_no: str, new_password: str) -> bool:
+    """Reset student password using a previously issued token. Returns True on success."""
+    try:
+        if not token or not admission_no or not new_password:
+            return False
+        from database.verification_keys import get_key, delete_key
+        found = get_key(token)
+        if not found:
+            return False
+        # Validate token belongs to admission_no
+        if str(found.get('user_id')).strip().lower() != admission_no.strip().lower():
+            return False
+
+        # Perform password update
+        ok = update_student_data(admission_no, {'password': new_password})
+        if ok:
+            # Remove token so it can't be reused
+            try:
+                delete_key(token)
+            except Exception:
+                pass
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def send_reset_email(to_email: str, token: str, admission_no: str) -> bool:
+    """Send a password reset email with token. Requires SMTP config in Streamlit secrets or env vars.
+    Returns True on success.
+    """
+    try:
+        import smtplib
+        from email.message import EmailMessage
+
+        # Prefer Streamlit secrets, fall back to environment
+        smtp_host = None
+        smtp_port = None
+        smtp_user = None
+        smtp_pass = None
+        smtp_from = None
+        try:
+            smtp_host = st.secrets.get('SMTP_HOST')
+            smtp_port = int(st.secrets.get('SMTP_PORT')) if st.secrets.get('SMTP_PORT') else None
+            smtp_user = st.secrets.get('SMTP_USER')
+            smtp_pass = st.secrets.get('SMTP_PASS')
+            smtp_from = st.secrets.get('SMTP_FROM') or smtp_user
+        except Exception:
+            pass
+
+        import os
+        if not smtp_host:
+            smtp_host = os.environ.get('SMTP_HOST')
+        if not smtp_port:
+            smtp_port = int(os.environ.get('SMTP_PORT', 587))
+        if not smtp_user:
+            smtp_user = os.environ.get('SMTP_USER')
+        if not smtp_pass:
+            smtp_pass = os.environ.get('SMTP_PASS')
+        if not smtp_from:
+            smtp_from = smtp_user or f"noreply@{smtp_host or 'example.com'}"
+
+        if not smtp_host or not smtp_port:
+            return False
+
+        msg = EmailMessage()
+        msg['Subject'] = 'Password reset for your student portal'
+        msg['From'] = smtp_from
+        msg['To'] = to_email
+        body = f"A password reset was requested for admission {admission_no}.\n\nUse this token to reset the password: {token}\n\nIf you did not request this, ignore this email."
+        msg.set_content(body)
+
+        server = smtplib.SMTP(host=smtp_host, port=smtp_port, timeout=10)
+        try:
+            server.starttls()
+            if smtp_user and smtp_pass:
+                server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+            return True
+        finally:
+            try:
+                server.quit()
+            except Exception:
+                pass
+    except Exception:
+        return False
+
+
+def save_student_passport(admission_no: str, uploaded_file) -> str:
+    """Save uploaded student passport image and update student record (DB preferred, fallback to JSON).
+    uploaded_file may be a Streamlit UploadedFile-like object with .read() and .name attributes.
+    Returns the saved filename or None on failure.
+    """
+    try:
+        if not admission_no or uploaded_file is None:
+            return None
+
+        passports_dir = "student_passports"
+        os.makedirs(passports_dir, exist_ok=True)
+
+        # Derive extension
+        original_name = getattr(uploaded_file, 'name', None) or "passport.jpg"
+        _, ext = os.path.splitext(original_name)
+        if not ext:
+            ext = '.jpg'
+
+        safe_name = f"{admission_no.replace('/', '_')}_passport{ext}"
+        path = os.path.join(passports_dir, safe_name)
+
+        # Read bytes from uploaded_file
+        try:
+            data = uploaded_file.read()
+        except Exception:
+            # Some file-like objects use getbuffer
+            try:
+                data = uploaded_file.getbuffer()
+            except Exception:
+                return None
+
+        with open(path, 'wb') as f:
+            f.write(data)
+
+        # Persist reference to student record
+        ok = update_student_data(admission_no, {'photo_filename': safe_name})
+        if ok:
+            try:
+                create_audit_log("student_passport_uploaded", st.session_state.get('teacher_id', 'unknown'), {"admission_no": admission_no, "file": safe_name}, "personal_data")
+            except Exception:
+                pass
+            return safe_name
+        return None
+    except Exception:
+        return None
 
 def process_csv_student_import(csv_file):
     """Process CSV file to import multiple students"""
@@ -2160,6 +2830,24 @@ def get_grade_distribution_data():
 
 def delete_student_data(student_name, student_class):
     try:
+        # Try DB delete first
+        try:
+            conn = get_healthy_sql_connection()
+        except Exception:
+            conn = None
+
+        if conn:
+            try:
+                # Delete by name and class
+                delete_sql = text("DELETE FROM students WHERE full_name = :full_name AND class_name = :class_name")
+                success = execute_sql_with_retry(delete_sql, {'full_name': student_name, 'class_name': student_class})
+                if success:
+                    create_audit_log("student_deleted", st.session_state.get('teacher_id','unknown'), {"student_name": student_name, "student_class": student_class}, "personal_data")
+                    return True
+            except Exception:
+                pass
+
+        # Fallback to JSON files
         students_dir = "student_database"
         student_filename = f"{student_name.replace(' ', '_')}_{student_class.replace(' ', '_')}.json"
         student_path = os.path.join(students_dir, student_filename)
@@ -4209,7 +4897,7 @@ def login_page():
                     st.error("🚨 Subscription expired - Grace period active")
 
     # Create tabs for login, teacher registration, and developer login
-    login_tab, register_tab, developer_tab = st.tabs(["🔐 Staff Login", "👨‍🏫 Teacher Registration", "👨‍💻 Developer Login"])
+    login_tab, register_tab, developer_tab, student_tab = st.tabs(["🔐 Staff Login", "👨‍🏫 Teacher Registration", "👨‍💻 Developer Login", "👩‍🎓 Student Portal"])
 
     with login_tab:
         staff_login_form()
@@ -4219,6 +4907,178 @@ def login_page():
         
     with developer_tab:
         developer_login_form()
+
+    with student_tab:
+        student_login_form()
+
+
+def student_login_form():
+    """Simple student login by admission number and surname."""
+    st.markdown("### 👩‍🎓 Student Login")
+    with st.form("student_login"):
+        admission_no = st.text_input("Admission Number", placeholder="ASS/25/001")
+        use_password = st.checkbox("Login using password", value=False)
+        if use_password:
+            password = st.text_input("Password", type="password", placeholder="Enter password")
+            surname = None
+        else:
+            surname = st.text_input("Surname", placeholder="Surname")
+            password = None
+        submitted = st.form_submit_button("🔓 Login")
+
+    if submitted:
+        if not admission_no or (use_password and not password) or (not use_password and not surname):
+            st.error("Please provide admission number and the selected credential (surname or password).")
+            return
+
+        # Prefer DB lookup
+    matched = None
+    try:
+        conn = get_healthy_sql_connection()
+    except Exception:
+        conn = None
+
+    if conn:
+        try:
+            if use_password and password:
+                auth = authenticate_student_with_password(admission_no.strip(), password)
+                if auth:
+                    matched = auth
+            else:
+                df = query_with_retry(text("SELECT full_name, class_name, admission_number FROM students WHERE admission_number = :adm LIMIT 1"), {'adm': admission_no.strip()})
+                if df is not None and not df.empty and surname:
+                    row = df.iloc[0]
+                    full_name = row.get('full_name')
+                    name_parts = full_name.strip().split()
+                    if name_parts and name_parts[-1].strip().lower() == surname.strip().lower():
+                        matched = {'student_name': full_name, 'student_class': row.get('class_name'), 'admission_no': row.get('admission_number')}
+        except Exception:
+            matched = None
+
+    # Fallback to file-based lookup if DB didn't match
+    if not matched:
+        students = get_all_students()
+        for s in students:
+            if s.get('admission_no') and s.get('admission_no').strip().lower() == admission_no.strip().lower():
+                # compare surname
+                name_parts = s.get('student_name', '').strip().split()
+                if len(name_parts) > 0 and name_parts[-1].strip().lower() == surname.strip().lower():
+                    matched = s
+                    break
+
+    if matched:
+        st.session_state.student_authenticated = True
+        st.session_state.student_admission = admission_no.strip()
+        st.session_state.student_name = matched.get('student_name')
+        st.success(f"Welcome {matched.get('student_name')} — opening Student Portal...")
+        st.experimental_rerun()
+    else:
+        st.error("Student not found. Check admission number and surname.")
+
+
+def student_portal_page():
+    st.set_page_config(page_title="Student Portal", layout="centered", page_icon="🎓")
+    apply_custom_css()
+
+    if not st.session_state.get('student_authenticated'):
+        st.info("Please login from the home screen to access the Student Portal.")
+        return
+
+    admission_no = st.session_state.get('student_admission')
+    student_name = st.session_state.get('student_name')
+
+    st.markdown(f"### 👋 Welcome, {student_name} ({admission_no})")
+    st.markdown("You can view and download your verified reports below.")
+
+    # Show student profile and passport
+    student = get_student_by_admission(admission_no)
+    left, right = st.columns([1, 3])
+    with left:
+        photo = student.get('photo_filename') if student else None
+        if photo:
+            photo_path = os.path.join('student_passports', photo)
+            if os.path.exists(photo_path):
+                try:
+                    st.image(photo_path, width=150, caption="Passport")
+                except Exception:
+                    st.write("[Passport image]")
+            else:
+                st.write("No passport image found")
+        else:
+            st.write("No passport uploaded")
+
+        # Allow student to upload/change their passport
+        uploaded = st.file_uploader("Upload/Change Passport", type=['png', 'jpg', 'jpeg'], key=f"passport_upload_{admission_no}")
+        if uploaded is not None:
+            saved = save_student_passport(admission_no, uploaded)
+            if saved:
+                st.success("Passport uploaded successfully")
+                st.experimental_rerun()
+            else:
+                st.error("Failed to upload passport. Try again.")
+
+    with right:
+        if student:
+            st.markdown(f"**Name:** {student.get('student_name')}")
+            st.markdown(f"**Class:** {student.get('student_class')}")
+            st.markdown(f"**Admission:** {student.get('admission_no')}")
+            if student.get('parent_name'):
+                st.markdown(f"**Parent:** {student.get('parent_name')}")
+
+    reports = list_reports_for_student(admission_no)
+    if not reports:
+        st.info("No reports found for your admission number yet. Contact your school.")
+    else:
+        for r in sorted(reports, key=lambda x: x.get('created_at', ''), reverse=True):
+            cols = st.columns([4, 1])
+            with cols[0]:
+                st.markdown(f"**{r.get('term', 'Term')}** — {r.get('student_class', '')} — Report ID: **{r.get('report_id')}**")
+                created = r.get('created_at')
+                if created:
+                    try:
+                        dt = datetime.fromisoformat(created)
+                        st.caption(dt.strftime('%Y-%m-%d %H:%M'))
+                    except Exception:
+                        st.caption(created)
+            with cols[1]:
+                fp = r.get('file_path')
+                if fp and os.path.exists(fp):
+                    with open(fp, 'rb') as f:
+                        btn = st.download_button(f"⬇️", f, file_name=os.path.basename(fp), mime='application/pdf')
+                else:
+                    st.write("Missing file")
+
+    if st.button("🔓 Logout", key="student_logout"):
+        st.session_state.student_authenticated = False
+        st.session_state.student_admission = None
+        st.session_state.student_name = None
+        st.experimental_rerun()
+
+    # Allow password change for authenticated students
+    with st.expander("🔑 Change Password", expanded=False):
+        if st.session_state.get('student_authenticated'):
+            with st.form("change_password_form"):
+                current = st.text_input("Current Password", type="password")
+                new_pwd = st.text_input("New Password", type="password")
+                new_pwd_confirm = st.text_input("Confirm New Password", type="password")
+                if st.form_submit_button("Change Password"):
+                    if not current or not new_pwd:
+                        st.error("Please provide current and new password")
+                    elif new_pwd != new_pwd_confirm:
+                        st.error("New passwords do not match")
+                    else:
+                        adm = st.session_state.get('student_admission')
+                        auth = authenticate_student_with_password(adm, current)
+                        if not auth:
+                            st.error("Current password incorrect")
+                        else:
+                            ok = update_student_data(adm, {'password': new_pwd})
+                            if ok:
+                                st.success("Password updated successfully")
+                            else:
+                                st.error("Failed to update password")
+        else:
+            st.write("Log in to change your password")
 
 def teacher_registration_form():
     """Teacher self-registration form - requires approval from principal/admin"""
@@ -5590,6 +6450,40 @@ def report_generator_tab():
                     width='stretch'
                 )
 
+            # Ask teacher whether to send to Student Portal
+            send_option = st.radio("📨 Send to Student Portal?", ["No", "Yes"], index=0, horizontal=True)
+            if send_option == "Yes":
+                admission_to_send = st.text_input("Enter Admission Number to send to", key="send_to_admission")
+                if st.button("📩 Send to Student Portal", key="send_to_student_btn"):
+                    if not admission_to_send:
+                        st.error("Please enter an admission number.")
+                    else:
+                        try:
+                            # Validate admission exists when DB is available
+                            try:
+                                conn = get_healthy_sql_connection()
+                            except Exception:
+                                conn = None
+
+                            admission = admission_to_send.strip()
+                            if conn:
+                                df = query_with_retry(text("SELECT admission_number FROM students WHERE admission_number = :adm LIMIT 1"), {'adm': admission})
+                                if df is None or df.empty:
+                                    st.error("❌ No student found with that admission number.")
+                                    return
+
+                            with open("report_card.pdf", "rb") as rf:
+                                pdf_bytes = rf.read()
+                            metadata = {"student_name": student_name, "student_class": student_class, "term": term}
+                            ok = save_report_for_student(admission, report_id, pdf_bytes, metadata)
+                            if ok:
+                                st.success(f"✅ Report sent to student portal for {admission}")
+                                create_audit_log("report_sent_to_student", st.session_state.get('teacher_id','unknown'), {"report_id": report_id, "admission_no": admission}, "report_delivery")
+                            else:
+                                st.error("❌ Failed to send report to student portal. Check admission number and try again.")
+                        except Exception as e:
+                            st.error(f"❌ Error sending to student portal: {e}")
+
             # First generate and save verification key
             try:
                 import secrets
@@ -5674,12 +6568,59 @@ def report_generator_tab():
 def student_database_tab():
     st.subheader("👥 Student Database")
 
-    admin_users = ["developer_001"]
-    is_admin = st.session_state.teacher_id in admin_users
+    # Principals and Developers should be able to add students
+    is_admin = False
+    try:
+        is_admin = check_user_permissions(st.session_state.teacher_id, "student_management") or check_user_permissions(st.session_state.teacher_id, "system_config") or st.session_state.get('developer_authenticated', False)
+    except Exception:
+        is_admin = False
 
     if not is_admin:
         st.warning("⚠️ Admin access required to add new students.")
-        st.info("Only administrators can add students to the database.")
+        st.info("Only administrators (Principals, Developers) can add students to the database.")
+
+    # Check DB availability and offer init option to admins
+    try:
+        db_conn_available = bool(get_healthy_sql_connection())
+    except Exception:
+        db_conn_available = False
+
+    if is_admin and not db_conn_available:
+        st.warning("⚠️ Database not available. Student records will be stored as files until DB is configured.")
+        if st.button("🔧 Initialize Database Tables Now"):
+            with st.spinner("Initializing database tables..."):
+                ok = init_database_tables()
+                if ok:
+                    st.success("✅ Database initialized — student operations will now use the database.")
+                    st.experimental_rerun()
+                else:
+                    st.error("❌ Database initialization failed. Check logs and configuration.")
+
+        # Offer migration of existing JSON student files into DB
+        if os.path.exists('student_database') and st.button("📦 Migrate existing student JSON files to DB"):
+            with st.spinner("Migrating students to database..."):
+                migrated = 0
+                failed = 0
+                for fname in os.listdir('student_database'):
+                    if not fname.endswith('.json'):
+                        continue
+                    try:
+                        with open(os.path.join('student_database', fname), 'r') as rf:
+                            s = json.load(rf)
+                        ok = save_student_data(
+                            student_name=s.get('student_name',''),
+                            student_class=s.get('student_class',''),
+                            parent_name=s.get('parent_name',''),
+                            parent_email=decrypt_data(s.get('parent_email',''), generate_encryption_key("akins_sunrise_school_encryption")) if s.get('data_encrypted', False) else s.get('parent_email',''),
+                            parent_phone=decrypt_data(s.get('parent_phone',''), generate_encryption_key("akins_sunrise_school_encryption")) if s.get('data_encrypted', False) else s.get('parent_phone','')
+                        )
+                        if ok:
+                            migrated += 1
+                        else:
+                            failed += 1
+                    except Exception:
+                        failed += 1
+                st.success(f"✅ Migration complete — {migrated} migrated, {failed} failed.")
 
     if is_admin:
         # Bulk operations section
@@ -5849,6 +6790,36 @@ def student_database_tab():
                     else:
                         st.error("❌ Please fill in required fields (marked with *)")
 
+    # Admin: manage password-reset tokens
+    if is_admin:
+        with st.expander("🔐 Manage Password Reset Tokens", expanded=False):
+            from database.verification_keys import list_keys, delete_key
+
+            try:
+                keys = list_keys(200)
+            except Exception:
+                keys = []
+
+            if not keys:
+                st.info("No active tokens found.")
+            else:
+                for k in keys:
+                    cols = st.columns([4, 2, 1])
+                    with cols[0]:
+                        st.write(f"**{k['key']}** — {k.get('user_id')} — {k.get('created_at')}")
+                        if k.get('report_data'):
+                            st.caption(str(k.get('report_data')))
+                    with cols[1]:
+                        if st.button("Revoke", key=f"revoke_{k['key']}"):
+                            ok = delete_key(k['key'])
+                            if ok:
+                                st.success("Token revoked")
+                                st.experimental_rerun()
+                            else:
+                                st.error("Failed to revoke token")
+                    with cols[2]:
+                        st.write("")
+
     st.markdown("### 📋 All Students")
     students = get_all_students()
 
@@ -5879,7 +6850,7 @@ def student_database_tab():
                 if i + j < len(filtered_students):
                     student = filtered_students[i + j]
                     with col:
-                        student_col, delete_col = st.columns([4, 1])
+                        student_col, edit_col, delete_col = st.columns([3,1,1])
 
                         with student_col:
                             # Decrypt parent email for display
@@ -5899,6 +6870,15 @@ def student_database_tab():
                             </div>
                             """, unsafe_allow_html=True)
 
+                        with edit_col:
+                            if is_admin:
+                                if st.button("✏️", key=f"edit_{student.get('admission_no','')}", help="Edit student", width='stretch'):
+                                    # Load latest student data
+                                    adm = student.get('admission_no') or student.get('admission_no')
+                                    st.session_state['editing_student_adm'] = adm
+                                    st.session_state['editing_student'] = get_student_by_admission(adm) or student
+                                    st.experimental_rerun()
+
                         with delete_col:
                             if is_admin:
                                 if st.button("🗑️", key=f"delete_{student['student_name']}_{student['student_class']}", 
@@ -5908,6 +6888,38 @@ def student_database_tab():
                                         st.rerun()
                                     else:
                                         st.error("❌ Error deleting student")
+                        # Show edit form inline if this student is being edited
+                        if st.session_state.get('editing_student_adm') == student.get('admission_no'):
+                            with st.form(f"edit_student_form_{student.get('admission_no')}"):
+                                st.markdown("### ✏️ Edit Student")
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    edit_name = st.text_input("Student Name", value=student.get('student_name',''))
+                                    edit_class = st.text_input("Class", value=student.get('student_class',''))
+                                    edit_adm = st.text_input("Admission Number", value=student.get('admission_no',''))
+                                with col2:
+                                    edit_parent = st.text_input("Parent Name", value=student.get('parent_name',''))
+                                    edit_parent_email = st.text_input("Parent Email", value=student.get('parent_email', ''))
+                                    edit_parent_phone = st.text_input("Parent Phone", value=student.get('parent_phone',''))
+
+                                if st.form_submit_button("💾 Save Changes"):
+                                    updates = {
+                                        'student_name': edit_name,
+                                        'student_class': edit_class,
+                                        'parent_name': edit_parent,
+                                        'parent_email': edit_parent_email,
+                                        'parent_phone': edit_parent_phone
+                                    }
+                                    ok = update_student_data(edit_adm, updates)
+                                    if ok:
+                                        st.success("✅ Student updated successfully")
+                                        # Clear editing state and refresh
+                                        del st.session_state['editing_student_adm']
+                                        if 'editing_student' in st.session_state:
+                                            del st.session_state['editing_student']
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Failed to update student")
     else:
         st.info("📭 No students in database yet. Add your first student above!")
 
@@ -8896,14 +9908,23 @@ def init_database_tables():
             except Exception:
                 pass
 
-        # Add missing authentication columns if they don't exist
+        # Add missing authentication columns if they don't exist (handle SQLite separately)
         try:
             migration_sql = text("ALTER TABLE users ADD COLUMN IF NOT EXISTS failed_attempts INTEGER DEFAULT 0")
             migration_sql2 = text("ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until TIMESTAMP")
             if use_engine:
                 with conn.begin() as connection:
-                    connection.execute(migration_sql)
-                    connection.execute(migration_sql2)
+                    dialect = connection.dialect.name
+                    if dialect == 'sqlite':
+                        res = connection.execute(text("PRAGMA table_info(users)")).fetchall()
+                        cols = [r[1] for r in res]
+                        if 'failed_attempts' not in cols:
+                            connection.execute(text("ALTER TABLE users ADD COLUMN failed_attempts INTEGER DEFAULT 0"))
+                        if 'locked_until' not in cols:
+                            connection.execute(text("ALTER TABLE users ADD COLUMN locked_until TIMESTAMP"))
+                    else:
+                        connection.execute(migration_sql)
+                        connection.execute(migration_sql2)
             else:
                 session.execute(migration_sql)
                 session.commit()
@@ -8918,13 +9939,39 @@ def init_database_tables():
             except Exception:
                 pass
 
+        # Ensure students table has password_hash column for student logins (handle SQLite)
+        try:
+            migration_sql_pw = text("ALTER TABLE students ADD COLUMN IF NOT EXISTS password_hash TEXT")
+            if use_engine:
+                with conn.begin() as connection:
+                    dialect = connection.dialect.name
+                    if dialect == 'sqlite':
+                        res = connection.execute(text("PRAGMA table_info(students)")).fetchall()
+                        cols = [r[1] for r in res]
+                        if 'password_hash' not in cols:
+                            connection.execute(text("ALTER TABLE students ADD COLUMN password_hash TEXT"))
+                    else:
+                        connection.execute(migration_sql_pw)
+            else:
+                session.execute(migration_sql_pw)
+                session.commit()
+            print("✅ Student authentication column ensured")
+        except Exception as e:
+            print(f"⚠️ Student password column migration issue: {e}")
+            try:
+                if not use_engine and 'session' in locals():
+                    session.rollback()
+            except Exception:
+                pass
+
         # Add indexes
         try:
             for index_sql_str in [
                 "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
                 "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)", 
                 "CREATE INDEX IF NOT EXISTS idx_activationkeys_active ON activationkeys(is_active)",
-                "CREATE INDEX IF NOT EXISTS idx_students_class ON students(class_name)"
+                "CREATE INDEX IF NOT EXISTS idx_students_class ON students(class_name)",
+                "CREATE INDEX IF NOT EXISTS idx_student_reports_adm ON student_reports(admission_number)"
             ]:
                 if use_engine:
                     with conn.begin() as connection:
@@ -8940,6 +9987,27 @@ def init_database_tables():
                     session.rollback()
             except Exception:
                 pass
+
+        # Create student_reports table
+        try:
+            reports_sql = text("""
+                CREATE TABLE IF NOT EXISTS student_reports (
+                    id SERIAL PRIMARY KEY,
+                    admission_number TEXT NOT NULL,
+                    report_id TEXT NOT NULL,
+                    file_path TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            if use_engine:
+                with conn.begin() as connection:
+                    connection.execute(reports_sql)
+            else:
+                session.execute(reports_sql)
+                session.commit()
+            print("✅ student_reports table ready")
+        except Exception as e:
+            print(f"⚠️ student_reports table creation issue: {e}")
 
         print(f"✅ Database initialization complete - {tables_created} tables ready")
         return True
@@ -9108,6 +10176,13 @@ def main():
         st.session_state.authenticated = False
     if 'teacher_id' not in st.session_state:
         st.session_state.teacher_id = None
+    if 'student_authenticated' not in st.session_state:
+        st.session_state.student_authenticated = False
+
+    # If a student is logged in, show the student portal
+    if st.session_state.student_authenticated:
+        student_portal_page()
+        return
 
     if not st.session_state.authenticated:
         # Check if pending 2FA verification

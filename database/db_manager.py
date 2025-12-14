@@ -20,6 +20,13 @@ def get_engine():
     Reads DATABASE_URL from Streamlit secrets or environment variables.
     """
     try:
+        # Allow a test-mode fallback to an in-memory sqlite DB when running tests
+        import os
+        if os.environ.get('TESTING') == '1':
+            from sqlalchemy import create_engine as _create_engine
+            engine = _create_engine('sqlite:///:memory:', echo=False, future=True)
+            return engine
+
         db_url = st.secrets["DATABASE_URL"]
         if not db_url:
             raise ValueError("Empty DATABASE_URL")

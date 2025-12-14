@@ -1,0 +1,9 @@
+{
+  "student_name": "Test Student",
+  "student_class": "SS1A",
+  "admission_no": "ASS/25/001",
+  "parent_name": "Test Parent",
+  "parent_email": "parent@example.com",
+  "parent_phone": "+10000000000",
+  "data_encrypted": false
+}

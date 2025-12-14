@@ -1,0 +1,97 @@
+[
+  {
+    "timestamp": "2025-12-14T08:30:46.036884",
+    "action": "developer_login_success",
+    "user_id": "developer_001",
+    "data_type": "authentication",
+    "details": {
+      "login_method": "developer_password",
+      "timestamp": "2025-12-14T08:30:46.036737",
+      "access_level": "full_system_control"
+    },
+    "ip_address": "replit_session",
+    "session_id": "2c2a2d320d22cec8",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-12-14T09:02:37.811623",
+    "action": "student_data_created",
+    "user_id": "unknown",
+    "data_type": "personal_data",
+    "details": {
+      "student_name": "DB Student",
+      "student_class": "SS1A",
+      "admission_no": "ASS/99/555",
+      "data_encrypted": true
+    },
+    "ip_address": "replit_session",
+    "session_id": "8874273434b13081",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-12-14T09:06:42.338515",
+    "action": "student_data_created",
+    "user_id": "unknown",
+    "data_type": "personal_data",
+    "details": {
+      "student_name": "DB Student",
+      "student_class": "SS1A",
+      "admission_no": "ASS/99/555",
+      "data_encrypted": true
+    },
+    "ip_address": "replit_session",
+    "session_id": "df80baf10a95aafa",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-12-14T09:24:28.758037",
+    "action": "student_data_created",
+    "user_id": "unknown",
+    "data_type": "personal_data",
+    "details": {
+      "student_name": "DB Reset",
+      "student_class": "SS1A",
+      "admission_no": "ASS/33/999",
+      "data_encrypted": true
+    },
+    "ip_address": "replit_session",
+    "session_id": "b90186b198607061",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-12-14T09:25:41.955896",
+    "action": "student_data_created",
+    "user_id": "unknown",
+    "data_type": "personal_data",
+    "details": {
+      "student_name": "DB Reset",
+      "student_class": "SS1A",
+      "has_photo": false,
+      "data_encrypted": true
+    },
+    "ip_address": "replit_session",
+    "session_id": "e5cc0f2e40f27f96",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  },
+  {
+    "timestamp": "2025-12-14T09:25:41.989360",
+    "action": "student_updated",
+    "user_id": "unknown",
+    "data_type": "personal_data",
+    "details": {
+      "admission_no": "ASS/33/999",
+      "updates": {
+        "password": "newdbpass"
+      }
+    },
+    "ip_address": "replit_session",
+    "session_id": "640ac64ac08cedb0",
+    "compliance_level": "high",
+    "retention_period": "7_years"
+  }
+]

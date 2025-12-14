@@ -1,0 +1,18 @@
+{
+  "student_name": "DB Reset",
+  "student_class": "SS1A",
+  "parent_name": "Parent",
+  "parent_email": "Z0FBQUFBQnBQb0tWVW8tSTF5MGhOQWY0Z0NPUk5KYm53Q0RIVFdPRHNZM0ZuYVN3QmRTb3NqTEt3cnJqbGpwYkZ6alhiTElkM0NtUm9xNUpoX0NhRzhSWDhMRWpqeVlPdGFYcUVnZDdBZjEyUXExdXhiS1VOcW89",
+  "parent_phone": "Z0FBQUFBQnBQb0tWbjZSaUJzSUxkaDlzUEZnRFh2OW1MRnhhdTA5YWhzRFZHOU4wYWwySXFsMzl5aDdDXzR0V1R2bDBITGFJNlkxSWgzbmk5cmFIdnFZVUVLWDRobFF3MWc9PQ==",
+  "gender": "Male",
+  "admission_no": "ASS/33/999",
+  "class_size": "35",
+  "attendance": "95%",
+  "position": "1st",
+  "created_date": "2025-12-14T09:25:41.955304",
+  "last_updated": "2025-12-14T09:25:41.988973",
+  "created_by": "unknown",
+  "data_encrypted": true,
+  "compliance_level": "gdpr_compliant",
+  "password_hash": "fba506a07eddd371ef4d0a8bf2ecc3c39959dd30c27dba5dd7da336594713846a0edc09ce7aa765b98d07d31b7e24c8f"
+}

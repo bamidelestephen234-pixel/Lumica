@@ -122,6 +122,25 @@ def get_key(key: str) -> Optional[dict]:
         db_manager.close_session(session)
 
 
+def list_keys(limit: int = 100):
+    """Return a list of verification keys (most recent first)."""
+    session = db_manager.get_session()
+    try:
+        rows = session.execute(text("SELECT key, user_id, result_id, report_data, created_at FROM verification_keys ORDER BY created_at DESC LIMIT :lim"), {"lim": limit}).fetchall()
+        result = []
+        for r in rows:
+            result.append({
+                "key": r[0],
+                "user_id": r[1],
+                "result_id": r[2],
+                "report_data": r[3],
+                "created_at": r[4]
+            })
+        return result
+    finally:
+        db_manager.close_session(session)
+
+
 def key_exists(key: str) -> bool:
     """Return True if the given verification key exists in the DB."""
     session = db_manager.get_session()
@@ -130,5 +149,20 @@ def key_exists(key: str) -> bool:
             text("SELECT 1 FROM verification_keys WHERE key = :key"), {"key": key}
         ).fetchone()
         return row is not None
+    finally:
+        db_manager.close_session(session)
+
+
+def delete_key(key: str) -> bool:
+    """Delete a verification key from the DB. Returns True if deleted."""
+    session = db_manager.get_session()
+    try:
+        res = session.execute(text("DELETE FROM verification_keys WHERE key = :key"), {"key": key})
+        session.commit()
+        return res.rowcount > 0
+    except Exception as e:
+        session.rollback()
+        print(f"Error deleting verification key: {e}")
+        return False
     finally:
         db_manager.close_session(session)
