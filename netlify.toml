@@ -1,7 +1,1 @@
-# Redirect to Streamlit app
-[build]
-publish = "public"
-[[redirects]]
-from = "/*"
-to = "/.netlify/functions/streamlit"
-status = 200
+[build]\n  base = "Lumica"\n  publish = "Lumica/build"\n  functions = "Lumica/functions"\n\n[[redirects]]\n  from = "/*"\n  to = "Lumica/build/index.html"\n  status = 200\n
