@@ -6176,18 +6176,7 @@ def report_generator_tab():
         scores_data.append((subject, ca, exam, total, last_cumulative, subject_cumulative, "-"))
         
         
-        
 
-    if selected_subjects and len(all_cumulatives) > 0:
-        st.markdown("### 🎯 Overall AI Prediction")
-        avg_last_term = np.mean([st.session_state.get(f"{s}_last", 0) for s in selected_subjects if st.session_state.get(f"{s}_last", 0) > 0]) if any(st.session_state.get(f"{s}_last", 0) > 0 for s in selected_subjects) else 0
-        avg_ca = np.mean([st.session_state.get(f"{s}_ca", 0) for s in selected_subjects])
-        avg_exam = np.mean([st.session_state.get(f"{s}_exam", 0) for s in selected_subjects])
-        
-        if avg_ca > 0 or avg_exam > 0:
-            with st.spinner("Generating overall AI prediction..."):
-                overall_prediction = generate_predictive_insight(avg_last_term, avg_ca, avg_exam, student_name, student_class, "Overall")
-                
    if selected_subjects and len(all_cumulatives) > 0:
         st.markdown("### 🎯 Overall Performance Summary")
         avg_last_term = np.mean([st.session_state.get(f"{s}_last", 0) for s in selected_subjects if st.session_state.get(f"{s}_last", 0) > 0]) if any(st.session_state.get(f"{s}_last", 0) > 0 for s in selected_subjects) else 0
