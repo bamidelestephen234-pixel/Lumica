@@ -6175,27 +6175,8 @@ def report_generator_tab():
 
         scores_data.append((subject, ca, exam, total, last_cumulative, subject_cumulative, "-"))
         
-        if ca > 0 or exam > 0:
-            with st.expander(f"🤖 AI Predictive Insight for {subject}", expanded=False):
-                with st.spinner("Generating AI prediction..."):
-                    prediction = generate_predictive_insight(last_cumulative, ca, exam, student_name, student_class, subject)
-                    
-                    if not prediction.get('error', False):
-                        st.success(f"**Prediction:** {prediction['prediction']}")
-                        
-                        col_pred1, col_pred2, col_pred3 = st.columns(3)
-                        with col_pred1:
-                            st.metric("Expected Range", prediction['expected_range'])
-                        with col_pred2:
-                            improvement_color = "🟢" if prediction['improvement_probability'] >= 70 else "🟡" if prediction['improvement_probability'] >= 40 else "🔴"
-                            st.metric("Improvement Probability", f"{improvement_color} {prediction['improvement_probability']}%")
-                        with col_pred3:
-                            current_status = "Improving" if total > last_cumulative else "Needs Support" if total < last_cumulative else "Stable"
-                            st.metric("Current Status", current_status)
-                    else:
-                        st.info(prediction['prediction'])
         
-        st.markdown("---")
+        
 
     if selected_subjects and len(all_cumulatives) > 0:
         st.markdown("### 🎯 Overall AI Prediction")
