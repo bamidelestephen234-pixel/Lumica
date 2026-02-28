@@ -302,7 +302,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from datetime import datetime
 
-from utils.ai_insights import generate_predictive_insight
+
 from database.scores_manager import save_report, save_subject_score, get_student_scores, get_student_historical_scores, get_subject_history
 
 # Simple cooldown to avoid hammering the remote DB when pool limits are hit
