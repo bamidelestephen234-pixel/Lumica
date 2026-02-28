@@ -1,0 +1,7 @@
+# Redirect to Streamlit app
+[build]
+publish = "public"
+[[redirects]]
+from = "/*"
+to = "/.netlify/functions/streamlit"
+status = 200
