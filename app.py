@@ -6188,19 +6188,23 @@ def report_generator_tab():
             with st.spinner("Generating overall AI prediction..."):
                 overall_prediction = generate_predictive_insight(avg_last_term, avg_ca, avg_exam, student_name, student_class, "Overall")
                 
-                if not overall_prediction.get('error', False):
-                    st.info(f"**Overall Performance Prediction:** {overall_prediction['prediction']}")
-                    
-                    col_overall1, col_overall2, col_overall3 = st.columns(3)
-                    with col_overall1:
-                        st.metric("Expected Overall Range", overall_prediction['expected_range'])
-                    with col_overall2:
-                        improvement_emoji = "🟢" if overall_prediction['improvement_probability'] >= 70 else "🟡" if overall_prediction['improvement_probability'] >= 40 else "🔴"
-                        st.metric("Overall Improvement", f"{improvement_emoji} {overall_prediction['improvement_probability']}%")
-                    with col_overall3:
-                        current_avg = avg_ca + avg_exam
-                        trend = "📈 Improving" if current_avg > avg_last_term else "📉 Declining" if current_avg < avg_last_term else "➡️ Stable"
-                        st.metric("Performance Trend", trend)
+        if selected_subjects and len(all_cumulatives) > 0:
+        st.markdown("### 🎯 Overall Performance Summary")
+        avg_last_term = np.mean([st.session_state.get(f"{s}_last", 0) for s in selected_subjects if st.session_state.get(f"{s}_last", 0) > 0]) if any(st.session_state.get(f"{s}_last", 0) > 0 for s in selected_subjects) else 0
+        avg_ca = np.mean([st.session_state.get(f"{s}_ca", 0) for s in selected_subjects])
+        avg_exam = np.mean([st.session_state.get(f"{s}_exam", 0) for s in selected_subjects])
+        
+        if avg_ca > 0 or avg_exam > 0:
+            overall_score = avg_ca + avg_exam
+            overall_grade = assign_grade(overall_score / 2 if overall_score > 0 else 0)
+            
+            col_overall1, col_overall2, col_overall3 = st.columns(3)
+            with col_overall1:
+                st.metric("Average CA Score", f"{avg_ca:.1f}")
+            with col_overall2:
+                st.metric("Average Exam Score", f"{avg_exam:.1f}")
+            with col_overall3:
+                st.metric("Overall Grade", overall_grade)
 
     # Auto-save and draft management
     col_auto1, col_auto2, col_auto3 = st.columns([1, 1, 1])
