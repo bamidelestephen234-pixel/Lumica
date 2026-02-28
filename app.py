@@ -18,7 +18,7 @@ def _safe_rerun():
                 # If the API exists but errors, continue to fallback
                 pass
 
-        # Fallback: toggle a query parameter to force a rerun.
+        # Fallback: toggle a query parameter to force 
         # Newer Streamlit versions expose `st.query_params` as a property that can be
         # read and assigned (preferred). Older versions used experimental_get/set helpers.
         try:
