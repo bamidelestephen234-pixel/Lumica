@@ -6205,7 +6205,6 @@ def report_generator_tab():
                 st.metric("Average Exam Score", f"{avg_exam:.1f}")
             with col_overall3:
                 st.metric("Overall Grade", overall_grade)
-
     # Auto-save and draft management
     col_auto1, col_auto2, col_auto3 = st.columns([1, 1, 1])
 
